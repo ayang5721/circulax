@@ -355,8 +355,8 @@ def test_complex_ac_sweep_jit(waveguide_complex_setup):
     assert jnp.allclose(S_eager, S_jit, atol=1e-10)
 
 
-def test_complex_ac_sweep_via_circuit():
-    """Circuit.ac() works for complex-valued (photonic) circuits."""
+def test_complex_sp_via_circuit():
+    """Circuit.sp() works for complex-valued (photonic) circuits."""
     from circulax.circuit import compile_circuit
     from circulax.components.photonic import OpticalWaveguide
 
@@ -382,10 +382,38 @@ def test_complex_ac_sweep_via_circuit():
     }
     circuit = compile_circuit(net_dict, models_map, is_complex=True)
     freqs = jnp.logspace(6, 10, 10)
-    S = circuit.ac(ports="in", freqs=freqs, z0=_OPT_Z0)
+    S = circuit.sp(ports="in", freqs=freqs, z0=_OPT_Z0)
     assert S.shape == (len(freqs), 1, 1)
     assert jnp.iscomplexobj(S)
     assert jnp.isfinite(jnp.abs(S)).all()
+
+
+def test_ac_deprecation_warning():
+    """Circuit.ac() emits a DeprecationWarning and delegates to sp()."""
+    import warnings
+
+    from circulax.circuit import compile_circuit
+    from circulax.components.photonic import OpticalWaveguide
+
+    models_map = {"waveguide": OpticalWaveguide, "ground": lambda: 0}
+    net_dict = {
+        "instances": {
+            "GND": {"component": "ground"},
+            "WG1": {"component": "waveguide", "settings": {"length_um": 100.0, "loss_dB_cm": 0.0}},
+        },
+        "connections": {"WG1,p2": "GND,p1"},
+        "ports": {"in": "WG1,p1"},
+    }
+    circuit = compile_circuit(net_dict, models_map, is_complex=True)
+    freqs = jnp.logspace(6, 10, 5)
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        S_ac = circuit.ac(ports="in", freqs=freqs, z0=_OPT_Z0)
+    assert len(w) == 1
+    assert issubclass(w[0].category, DeprecationWarning)
+    assert "sp()" in str(w[0].message)
+    S_sp = circuit.sp(ports="in", freqs=freqs, z0=_OPT_Z0)
+    assert jnp.allclose(S_ac, S_sp, atol=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +456,7 @@ def test_non_holomorphic_matches_holomorphic_for_waveguide(waveguide_complex_set
 
 
 def test_non_holomorphic_via_circuit():
-    """Circuit.ac(holomorphic=False) works for complex circuits."""
+    """Circuit.sp(holomorphic=False) works for complex circuits."""
     from circulax.circuit import compile_circuit
     from circulax.components.photonic import OpticalWaveguide
 
@@ -443,12 +471,12 @@ def test_non_holomorphic_via_circuit():
     }
     circuit = compile_circuit(net_dict, models_map, is_complex=True)
     freqs = jnp.logspace(6, 10, 10)
-    S = circuit.ac(ports="in", freqs=freqs, z0=_OPT_Z0, holomorphic=False)
+    S = circuit.sp(ports="in", freqs=freqs, z0=_OPT_Z0, holomorphic=False)
     assert S.shape == (len(freqs), 1, 1)
     assert jnp.iscomplexobj(S)
     assert jnp.isfinite(jnp.abs(S)).all()
 
-    S_std = circuit.ac(ports="in", freqs=freqs, z0=_OPT_Z0)
+    S_std = circuit.sp(ports="in", freqs=freqs, z0=_OPT_Z0)
     assert jnp.allclose(jnp.abs(S), jnp.abs(S_std), atol=1e-6)
 
 

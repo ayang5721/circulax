@@ -286,7 +286,7 @@ class Circuit:
         run_transient = setup_transient(groups=groups, linear_strategy=self.solver, transient_solver=transient_solver)
         return run_transient(t0=t0, t1=t1, dt0=dt0, y0=y0, saveat=saveat_obj, **kwargs)
 
-    def ac(
+    def sp(
         self,
         *,
         ports: str | Sequence[str],
@@ -297,7 +297,7 @@ class Circuit:
         params: dict[str, Any] | None = None,
         **param_updates: Any,
     ) -> jax.Array:
-        """Run an AC small-signal S-parameter sweep.
+        """Run a small-signal S-parameter sweep.
 
         Linearises at the DC operating point and sweeps over ``freqs``,
         returning S-parameters for the given ports.
@@ -322,7 +322,7 @@ class Circuit:
         from circulax.solvers import setup_ac_sweep
 
         updates = self._coerce_param_updates(params, param_updates)
-        arrays = self._require_scalar_params(updates, "ac")
+        arrays = self._require_scalar_params(updates, "sp")
         groups = self._with_param_values(arrays)
         if y_dc is None:
             y_dc = self.solver.solve_dc(
@@ -338,6 +338,28 @@ class Circuit:
             groups, self.sys_size, port_nodes, z0=z0, is_complex=self.solver.is_complex, holomorphic=holomorphic
         )
         return run_ac(y_dc, jnp.asarray(freqs))
+
+    def ac(
+        self,
+        *,
+        ports: str | Sequence[str],
+        freqs: jax.Array,
+        z0: float = 50.0,
+        y_dc: jax.Array | None = None,
+        holomorphic: bool = True,
+        params: dict[str, Any] | None = None,
+        **param_updates: Any,
+    ) -> jax.Array:
+        """Run a small-signal S-parameter sweep.
+
+        .. deprecated:: 0.2
+            Use :meth:`sp` instead. Will be removed in 0.3.
+
+        """
+        warnings.warn("Circuit.ac() is deprecated, use Circuit.sp() instead.", DeprecationWarning, stacklevel=2)
+        return self.sp(
+            ports=ports, freqs=freqs, z0=z0, y_dc=y_dc, holomorphic=holomorphic, params=params, **param_updates
+        )
 
     def hb(
         self,
