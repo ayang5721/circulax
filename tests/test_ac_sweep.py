@@ -167,6 +167,61 @@ def test_ac_sweep_matched_load():
 
 
 # ---------------------------------------------------------------------------
+# Per-port and per-frequency z0
+# ---------------------------------------------------------------------------
+
+
+def test_z0_per_port_matches_scalar(rc_netlist):
+    """z0 as a length-1 array gives the same result as the scalar."""
+    net_dict, models_map = rc_netlist
+    groups, num_vars, pmap = compile_netlist(net_dict, models_map)
+    solver = analyze_circuit(groups, num_vars)
+    y_dc = solver.solve_dc(groups, jnp.zeros(num_vars))
+    port_nodes = [pmap["R1,p1"]]
+
+    run_scalar = setup_ac_sweep(groups, num_vars, port_nodes, z0=_Z0)
+    run_array = setup_ac_sweep(groups, num_vars, port_nodes, z0=jnp.array([_Z0]))
+
+    S_scalar = run_scalar(y_dc, _FREQS)
+    S_array = run_array(y_dc, _FREQS)
+    assert jnp.allclose(S_scalar, S_array, atol=1e-10)
+
+
+def test_z0_per_port_analytical(rc_netlist):
+    """Per-port z0 gives the correct analytical S11 for a different impedance."""
+    net_dict, models_map = rc_netlist
+    groups, num_vars, pmap = compile_netlist(net_dict, models_map)
+    solver = analyze_circuit(groups, num_vars)
+    y_dc = solver.solve_dc(groups, jnp.zeros(num_vars))
+
+    z0_alt = 75.0
+    run_ac = setup_ac_sweep(groups, num_vars, [pmap["R1,p1"]], z0=jnp.array([z0_alt]))
+    S = run_ac(y_dc, _FREQS)
+    S11_ref = _analytical_s11(_FREQS, z0=z0_alt)
+    assert jnp.allclose(S[:, 0, 0], S11_ref, atol=1e-6)
+
+
+def test_z0_per_frequency(rc_netlist):
+    """Per-frequency z0 of shape (N_freqs, N_ports) matches per-point scalar results."""
+    net_dict, models_map = rc_netlist
+    groups, num_vars, pmap = compile_netlist(net_dict, models_map)
+    solver = analyze_circuit(groups, num_vars)
+    y_dc = solver.solve_dc(groups, jnp.zeros(num_vars))
+    port_nodes = [pmap["R1,p1"]]
+
+    freqs = jnp.array([1e6, 1e8, 1e10])
+    z0_values = jnp.array([50.0, 75.0, 100.0])
+    z0_2d = z0_values.reshape(-1, 1)  # (3, 1)
+
+    run_ac = setup_ac_sweep(groups, num_vars, port_nodes, z0=z0_2d)
+    S = run_ac(y_dc, freqs)
+
+    for i, z0_i in enumerate(z0_values):
+        S_ref = _analytical_s11(freqs[i : i + 1], z0=float(z0_i))
+        assert jnp.allclose(S[i, 0, 0], S_ref[0], atol=1e-6), f"Mismatch at freq index {i}, z0={z0_i}"
+
+
+# ---------------------------------------------------------------------------
 # JIT
 # ---------------------------------------------------------------------------
 
