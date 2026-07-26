@@ -201,24 +201,39 @@ def test_z0_per_port_analytical(rc_netlist):
     assert jnp.allclose(S[:, 0, 0], S11_ref, atol=1e-6)
 
 
-def test_z0_per_frequency(rc_netlist):
-    """Per-frequency z0 of shape (N_freqs, N_ports) matches per-point scalar results."""
+def test_renormalize_roundtrip(rc_netlist):
+    """Renormalize from z0=50 to z0=75, then back to z0=50 gives the original."""
+    from circulax.solvers import renormalize
+
     net_dict, models_map = rc_netlist
     groups, num_vars, pmap = compile_netlist(net_dict, models_map)
     solver = analyze_circuit(groups, num_vars)
     y_dc = solver.solve_dc(groups, jnp.zeros(num_vars))
-    port_nodes = [pmap["R1,p1"]]
 
-    freqs = jnp.array([1e6, 1e8, 1e10])
-    z0_values = jnp.array([50.0, 75.0, 100.0])
-    z0_2d = z0_values.reshape(-1, 1)  # (3, 1)
+    run_ac = setup_ac_sweep(groups, num_vars, [pmap["R1,p1"]], z0=_Z0)
+    S_50 = run_ac(y_dc, _FREQS)
 
-    run_ac = setup_ac_sweep(groups, num_vars, port_nodes, z0=z0_2d)
-    S = run_ac(y_dc, freqs)
+    S_75 = renormalize(S_50, z0_from=50.0, z0_to=75.0)
+    S_back = renormalize(S_75, z0_from=75.0, z0_to=50.0)
+    assert jnp.allclose(S_50, S_back, atol=1e-10), f"Roundtrip error: {jnp.max(jnp.abs(S_50 - S_back)):.2e}"
 
-    for i, z0_i in enumerate(z0_values):
-        S_ref = _analytical_s11(freqs[i : i + 1], z0=float(z0_i))
-        assert jnp.allclose(S[i, 0, 0], S_ref[0], atol=1e-6), f"Mismatch at freq index {i}, z0={z0_i}"
+
+def test_renormalize_analytical(rc_netlist):
+    """Renormalizing S(z0=50) to z0=75 matches direct solve at z0=75."""
+    from circulax.solvers import renormalize
+
+    net_dict, models_map = rc_netlist
+    groups, num_vars, pmap = compile_netlist(net_dict, models_map)
+    solver = analyze_circuit(groups, num_vars)
+    y_dc = solver.solve_dc(groups, jnp.zeros(num_vars))
+
+    S_50 = setup_ac_sweep(groups, num_vars, [pmap["R1,p1"]], z0=50.0)(y_dc, _FREQS)
+    S_75_renorm = renormalize(S_50, z0_from=50.0, z0_to=75.0)
+
+    S_75_direct = setup_ac_sweep(groups, num_vars, [pmap["R1,p1"]], z0=75.0)(y_dc, _FREQS)
+    assert jnp.allclose(S_75_renorm, S_75_direct, atol=1e-6), (
+        f"Max error: {jnp.max(jnp.abs(S_75_renorm - S_75_direct)):.2e}"
+    )
 
 
 # ---------------------------------------------------------------------------

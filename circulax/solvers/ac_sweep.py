@@ -50,17 +50,51 @@ from circulax.solvers.assembly import assemble_gc_complex, assemble_gc_complex_2
 from circulax.solvers.linear import GROUND_STIFFNESS, _build_index_arrays
 
 
-def _normalize_z0(z0: float | Array, n_ports: int, n_freqs: int | None = None) -> Array:
-    """Broadcast z0 to shape ``(N_ports,)`` or ``(N_freqs, N_ports)``."""
+def _normalize_z0(z0: float | Array, n_ports: int) -> Array:
+    """Broadcast z0 to shape ``(N_ports,)``."""
     z0 = jnp.atleast_1d(jnp.asarray(z0, dtype=jnp.complex128))
     if z0.ndim == 0 or (z0.ndim == 1 and z0.shape[0] == 1):
         return jnp.broadcast_to(z0.reshape(1), (n_ports,))
     if z0.ndim == 1 and z0.shape[0] == n_ports:
         return z0
-    if z0.ndim == 2 and n_freqs is not None and z0.shape == (n_freqs, n_ports):
-        return z0
-    msg = f"z0 must be a scalar, shape ({n_ports},), or shape ({n_freqs}, {n_ports}); got shape {z0.shape}"
+    msg = f"z0 must be a scalar or shape ({n_ports},); got shape {z0.shape}"
     raise ValueError(msg)
+
+
+def renormalize(
+    S: Array,
+    z0_from: float | Array,
+    z0_to: float | Array,
+) -> Array:
+    """Renormalize S-parameters from one reference impedance to another.
+
+    Transforms S-parameters computed at impedance ``z0_from`` to the
+    equivalent S-parameters at impedance ``z0_to``, using the standard
+    power-wave renormalization formula.
+
+    Args:
+        S: S-parameter array of shape ``(N_freqs, N_ports, N_ports)``.
+        z0_from: Original reference impedance.  Scalar or ``(N_ports,)``
+            for frequency-independent, or ``(N_freqs, N_ports)`` for
+            frequency-dependent impedance.
+        z0_to: Target reference impedance, same shape options as ``z0_from``.
+
+    Returns:
+        Renormalized S-parameter array, same shape as ``S``.
+
+    """
+    n_freqs, n_ports, _ = S.shape
+    z0_from = jnp.broadcast_to(jnp.atleast_1d(jnp.asarray(z0_from, dtype=jnp.complex128)), (n_freqs, n_ports))
+    z0_to = jnp.broadcast_to(jnp.atleast_1d(jnp.asarray(z0_to, dtype=jnp.complex128)), (n_freqs, n_ports))
+
+    def _renorm_one(S_f, zf, zt):
+        I = jnp.eye(n_ports, dtype=jnp.complex128)
+        gamma = (zt - zf) / (zt + zf)
+        Gamma = jnp.diag(gamma)
+        A = jnp.diag(jnp.sqrt(zt.real / zf.real) * zf / zt)
+        return A @ (S_f - Gamma) @ jnp.linalg.solve(I - Gamma @ S_f, I) @ jnp.linalg.inv(A)
+
+    return jax.vmap(_renorm_one)(S, z0_from, z0_to)
 
 
 def setup_ac_sweep(
@@ -106,12 +140,11 @@ def setup_ac_sweep(
 
         z0: Reference impedance in ohms.  Accepts:
 
-            - **scalar** — same impedance for all ports and frequencies
-              (default: 50.0).
-            - **array of shape** ``(N_ports,)`` — per-port impedance,
-              constant across frequencies.
-            - **array of shape** ``(N_freqs, N_ports)`` — per-frequency,
-              per-port impedance (like scikit-rf ``Network.z0``).
+            - **scalar** — same impedance for all ports (default: 50.0).
+            - **array of shape** ``(N_ports,)`` — per-port impedance.
+
+            For frequency-dependent impedance, solve at a fixed z0 and use
+            :func:`renormalize` afterwards.
 
         is_complex: If ``True``, use complex-valued assembly for photonic
             circuits.  The DC operating point ``y_dc`` is expected in unrolled
@@ -164,8 +197,7 @@ def setup_ac_sweep(
 
     gc_assemble = assemble_gc_complex if is_complex else assemble_gc_real
 
-    # Capture z0 in closure for shape validation at call time
-    z0_init = z0
+    z0_arr = _normalize_z0(z0, N_ports)
 
     # -------------------------------------------------------------------------
     def run_ac(y_dc: Array, freqs: Array) -> Array:
@@ -177,11 +209,10 @@ def setup_ac_sweep(
         C_mat = jnp.zeros((num_vars, num_vars), dtype=jnp.complex128)
         C_mat = C_mat.at[static_rows_jax, static_cols_jax].add(C_vals)
 
-        n_freqs = freqs.shape[0]
-        z0_arr = _normalize_z0(z0_init, N_ports, n_freqs)
-        per_freq = z0_arr.ndim == 2
+        RHS = jnp.zeros((num_vars, N_ports), dtype=jnp.complex128)
+        RHS = RHS.at[port_nodes_arr, jnp.arange(N_ports)].set(2.0 / z0_arr)
 
-        def _solve_one_freq(f: Array, z0_f: Array) -> Array:
+        def _solve_one_freq(f: Array) -> Array:
             omega = 2.0 * jnp.pi * f
             Y = G_mat + 1j * omega * C_mat
 
@@ -190,18 +221,14 @@ def setup_ac_sweep(
                 Y_mats = jax.vmap(functools.partial(group_fd.physics_func, f))(group_fd.params)
                 Y = Y.at[rows_fd, cols_fd].add(Y_mats.reshape(-1))
 
-            Y = Y.at[port_nodes_arr, port_nodes_arr].add(1.0 / z0_f)
+            Y = Y.at[port_nodes_arr, port_nodes_arr].add(1.0 / z0_arr)
             Y = Y.at[ground_indices, ground_indices].add(GROUND_STIFFNESS)
-
-            RHS = jnp.zeros((num_vars, N_ports), dtype=jnp.complex128)
-            RHS = RHS.at[port_nodes_arr, jnp.arange(N_ports)].set(2.0 / z0_f)
 
             V = jnp.linalg.solve(Y, RHS)
             V_ports = V[port_nodes_arr, :]
             return V_ports - jnp.eye(N_ports, dtype=jnp.complex128)
 
-        z0_per_freq = z0_arr if per_freq else jnp.broadcast_to(z0_arr, (n_freqs, N_ports))
-        return jax.vmap(_solve_one_freq)(freqs, z0_per_freq)
+        return jax.vmap(_solve_one_freq)(freqs)
 
     return run_ac
 
@@ -233,16 +260,15 @@ def _setup_ac_sweep_2n(
         if groups[gk].is_fdomain
     }
 
-    z0_init = z0
+    z0_arr = _normalize_z0(z0, N_ports)
 
     def run_ac_2n(y_dc: Array, freqs: Array) -> Array:
         G_blocks, C_blocks = assemble_gc_complex_2n(y_dc, groups)
 
-        n_freqs = freqs.shape[0]
-        z0_arr = _normalize_z0(z0_init, N_ports, n_freqs)
-        per_freq = z0_arr.ndim == 2
+        RHS = jnp.zeros((2 * N, N_ports), dtype=jnp.complex128)
+        RHS = RHS.at[port_nodes_arr, jnp.arange(N_ports)].set(2.0 / z0_arr)
 
-        def _solve_one_freq(f: Array, z0_f: Array) -> Array:
+        def _solve_one_freq(f: Array) -> Array:
             omega = 2.0 * jnp.pi * f
             Y = jnp.zeros((2 * N, 2 * N), dtype=jnp.complex128)
             for k in range(4):
@@ -259,17 +285,13 @@ def _setup_ac_sweep_2n(
                 Y = Y.at[rows_fd, cols_fd + N].add(-Y_flat.imag)
                 Y = Y.at[rows_fd + N, cols_fd].add(Y_flat.imag)
 
-            Y = Y.at[port_nodes_arr, port_nodes_arr].add(1.0 / z0_f)
+            Y = Y.at[port_nodes_arr, port_nodes_arr].add(1.0 / z0_arr)
             Y = Y.at[ground_2n, ground_2n].add(GROUND_STIFFNESS)
-
-            RHS = jnp.zeros((2 * N, N_ports), dtype=jnp.complex128)
-            RHS = RHS.at[port_nodes_arr, jnp.arange(N_ports)].set(2.0 / z0_f)
 
             V = jnp.linalg.solve(Y, RHS)
             V_ports = V[port_nodes_arr, :]
             return V_ports - jnp.eye(N_ports, dtype=jnp.complex128)
 
-        z0_per_freq = z0_arr if per_freq else jnp.broadcast_to(z0_arr, (n_freqs, N_ports))
-        return jax.vmap(_solve_one_freq)(freqs, z0_per_freq)
+        return jax.vmap(_solve_one_freq)(freqs)
 
     return run_ac_2n

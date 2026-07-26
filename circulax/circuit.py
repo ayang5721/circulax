@@ -305,9 +305,10 @@ class Circuit:
         Args:
             ports: Port name(s) to probe (e.g. ``"out"`` or ``["in", "out"]``).
             freqs: Frequency array in Hz.
-            z0: Reference impedance in ohms.  Scalar (uniform), array of
-                shape ``(N_ports,)`` (per-port), or ``(N_freqs, N_ports)``
-                (per-frequency, per-port).  Default 50 Ohm.
+            z0: Reference impedance in ohms.  Scalar (uniform) or array of
+                shape ``(N_ports,)`` (per-port).  Default 50 Ohm.  For
+                frequency-dependent impedance, solve at a fixed z0 and use
+                :func:`~circulax.solvers.renormalize` afterwards.
             y_dc: DC operating point. If ``None``, a DC solve is run first.
             holomorphic: If ``True`` (default), use the N×N Wirtinger system.
                 Set to ``False`` when the circuit contains non-holomorphic
