@@ -46,7 +46,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from circulax.solvers.assembly import assemble_gc_complex, assemble_gc_real
+from circulax.solvers.assembly import assemble_gc_complex, assemble_gc_complex_2n, assemble_gc_real
 from circulax.solvers.linear import GROUND_STIFFNESS, _build_index_arrays
 
 
@@ -57,6 +57,7 @@ def setup_ac_sweep(
     *,
     z0: float = 50.0,
     is_complex: bool = False,
+    nonholomorphic: bool = False,
 ) -> Callable[[Array, Array], Array]:
     """Configure and return a callable for AC small-signal S-parameter sweep.
 
@@ -95,6 +96,11 @@ def setup_ac_sweep(
         is_complex: If ``True``, use complex-valued assembly for photonic
             circuits.  The DC operating point ``y_dc`` is expected in unrolled
             block format (shape ``(2 * num_vars,)``).
+        nonholomorphic: If ``True``, use the full 2N×2N real-block system
+            instead of the N×N Wirtinger system.  Required when any component
+            uses non-holomorphic operations (e.g. ``jnp.real()``,
+            ``jnp.abs()``), which couple the field and its conjugate and make
+            the Wirtinger system incomplete.  Implies ``is_complex=True``.
 
     Returns:
         A callable ``run_ac(y_dc, freqs) -> S`` where:
@@ -108,9 +114,15 @@ def setup_ac_sweep(
         Compatible with :func:`jax.jit` and :func:`jax.vmap` over ``y_dc``.
 
     """
+    if nonholomorphic:
+        is_complex = True
+
     if 0 in port_nodes:
         msg = "Port node cannot be the ground node (index 0)."
         raise ValueError(msg)
+
+    if nonholomorphic:
+        return _setup_ac_sweep_2n(groups, num_vars, port_nodes, z0=z0)
 
     # --- Pre-compute static COO index arrays (captured in closure) -----------
     # Always use N-sized indices -- AC works in complex NxN space even for
@@ -188,3 +200,72 @@ def setup_ac_sweep(
         return jax.vmap(_solve_one_freq)(freqs)
 
     return run_ac
+
+
+def _setup_ac_sweep_2n(
+    groups: dict[str, Any],
+    num_vars: int,
+    port_nodes: list[int],
+    *,
+    z0: float = 50.0,
+) -> Callable[[Array, Array], Array]:
+    """Build an AC sweep using the full 2N×2N real-block system.
+
+    The S-parameter extraction operates on the 2N system where the first N
+    rows/columns correspond to real parts and the last N to imaginary parts.
+    Port terminations and S-parameter probes are placed at the real-part
+    indices of each port node.
+    """
+    N = num_vars
+    static_rows, static_cols, ground_idxs, _ = _build_index_arrays(groups, N, is_complex=False)
+    rows_j = jnp.array(static_rows)
+    cols_j = jnp.array(static_cols)
+    ground_2n = jnp.concatenate([jnp.array(ground_idxs), jnp.array(ground_idxs) + N])
+    offsets = jnp.array([[0, 0], [0, N], [N, 0], [N, N]])
+
+    N_ports = len(port_nodes)
+    port_nodes_arr = jnp.array(port_nodes, dtype=jnp.int32)
+
+    fdomain_scatter: dict[str, tuple[Array, Array]] = {
+        gk: (
+            jnp.array(groups[gk].jac_rows).reshape(-1),
+            jnp.array(groups[gk].jac_cols).reshape(-1),
+        )
+        for gk in sorted(groups)
+        if groups[gk].is_fdomain
+    }
+
+    def run_ac_2n(y_dc: Array, freqs: Array) -> Array:
+        G_blocks, C_blocks = assemble_gc_complex_2n(y_dc, groups)
+
+        # RHS: 2/z0 at real-part port indices
+        RHS = jnp.zeros((2 * N, N_ports), dtype=jnp.complex128)
+        RHS = RHS.at[port_nodes_arr, jnp.arange(N_ports)].set(2.0 / z0)
+
+        def _solve_one_freq(f: Array) -> Array:
+            omega = 2.0 * jnp.pi * f
+            Y = jnp.zeros((2 * N, 2 * N), dtype=jnp.complex128)
+            for k in range(4):
+                ro, co = offsets[k]
+                vals = (G_blocks[k] + 1j * omega * C_blocks[k]).astype(jnp.complex128)
+                Y = Y.at[rows_j + ro, cols_j + co].add(vals)
+
+            for gk, (rows_fd, cols_fd) in fdomain_scatter.items():
+                group_fd = groups[gk]
+                Y_mats = jax.vmap(functools.partial(group_fd.physics_func, f))(group_fd.params)
+                Y_flat = Y_mats.reshape(-1)
+                Y = Y.at[rows_fd, cols_fd].add(Y_flat.real)
+                Y = Y.at[rows_fd + N, cols_fd + N].add(Y_flat.real)
+                Y = Y.at[rows_fd, cols_fd + N].add(-Y_flat.imag)
+                Y = Y.at[rows_fd + N, cols_fd].add(Y_flat.imag)
+
+            Y = Y.at[port_nodes_arr, port_nodes_arr].add(1.0 / z0)
+            Y = Y.at[ground_2n, ground_2n].add(GROUND_STIFFNESS)
+
+            V = jnp.linalg.solve(Y, RHS)
+            V_ports = V[port_nodes_arr, :]
+            return V_ports - jnp.eye(N_ports, dtype=jnp.complex128)
+
+        return jax.vmap(_solve_one_freq)(freqs)
+
+    return run_ac_2n
