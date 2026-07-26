@@ -293,7 +293,7 @@ class Circuit:
         freqs: jax.Array,
         z0: float = 50.0,
         y_dc: jax.Array | None = None,
-        nonholomorphic: bool = False,
+        holomorphic: bool = True,
         params: dict[str, Any] | None = None,
         **param_updates: Any,
     ) -> jax.Array:
@@ -307,10 +307,10 @@ class Circuit:
             freqs: Frequency array in Hz.
             z0: Reference impedance (default 50 Ohm).
             y_dc: DC operating point. If ``None``, a DC solve is run first.
-            nonholomorphic: If ``True``, use the full 2N×2N real-block system
-                instead of the N×N Wirtinger system.  Required when any
-                component uses non-holomorphic operations (e.g.
-                ``jnp.real()``, ``jnp.abs()``).
+            holomorphic: If ``True`` (default), use the N×N Wirtinger system.
+                Set to ``False`` when the circuit contains non-holomorphic
+                operations (e.g. ``jnp.real()``, ``jnp.abs()``) to use the
+                full 2N×2N real-block system.
             params: Parameter updates (same format as :meth:`dc`).
                 Array-valued params are **not** supported.
             **param_updates: Global parameter overrides.
@@ -335,7 +335,7 @@ class Circuit:
         port_list = [ports] if isinstance(ports, str) else list(ports)
         port_nodes = [self._resolve_port_node(port) for port in port_list]
         run_ac = setup_ac_sweep(
-            groups, self.sys_size, port_nodes, z0=z0, is_complex=self.solver.is_complex, nonholomorphic=nonholomorphic
+            groups, self.sys_size, port_nodes, z0=z0, is_complex=self.solver.is_complex, holomorphic=holomorphic
         )
         return run_ac(y_dc, jnp.asarray(freqs))
 

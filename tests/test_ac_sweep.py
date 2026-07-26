@@ -389,12 +389,12 @@ def test_complex_ac_sweep_via_circuit():
 
 
 # ---------------------------------------------------------------------------
-# Nonholomorphic (2N block) AC sweep
+# Non-holomorphic (2N block) AC sweep
 # ---------------------------------------------------------------------------
 
 
-def test_nonholomorphic_matches_holomorphic_for_waveguide(waveguide_complex_setup):
-    """For a holomorphic circuit, nonholomorphic=True gives the same S-params."""
+def test_non_holomorphic_matches_holomorphic_for_waveguide(waveguide_complex_setup):
+    """For a holomorphic circuit, holomorphic=False gives the same S-params."""
     run_ac, y_dc = waveguide_complex_setup
     freqs = jnp.logspace(6, 10, 20)
     S_wirtinger = run_ac(y_dc, freqs)
@@ -418,7 +418,7 @@ def test_nonholomorphic_matches_holomorphic_for_waveguide(waveguide_complex_setu
     solver = analyze_circuit(groups, num_vars, is_complex=True)
     sys_size = num_vars * 2
     y_dc_2 = solver.solve_dc(groups, jnp.zeros(sys_size))
-    run_ac_2n = setup_ac_sweep(groups, num_vars, [pmap["WG1,p1"]], z0=_OPT_Z0, nonholomorphic=True)
+    run_ac_2n = setup_ac_sweep(groups, num_vars, [pmap["WG1,p1"]], z0=_OPT_Z0, holomorphic=False)
     S_2n = run_ac_2n(y_dc_2, freqs)
 
     assert S_2n.shape == S_wirtinger.shape
@@ -427,8 +427,8 @@ def test_nonholomorphic_matches_holomorphic_for_waveguide(waveguide_complex_setu
     )
 
 
-def test_nonholomorphic_via_circuit():
-    """Circuit.ac(nonholomorphic=True) works for complex circuits."""
+def test_non_holomorphic_via_circuit():
+    """Circuit.ac(holomorphic=False) works for complex circuits."""
     from circulax.circuit import compile_circuit
     from circulax.components.photonic import OpticalWaveguide
 
@@ -443,7 +443,7 @@ def test_nonholomorphic_via_circuit():
     }
     circuit = compile_circuit(net_dict, models_map, is_complex=True)
     freqs = jnp.logspace(6, 10, 10)
-    S = circuit.ac(ports="in", freqs=freqs, z0=_OPT_Z0, nonholomorphic=True)
+    S = circuit.ac(ports="in", freqs=freqs, z0=_OPT_Z0, holomorphic=False)
     assert S.shape == (len(freqs), 1, 1)
     assert jnp.iscomplexobj(S)
     assert jnp.isfinite(jnp.abs(S)).all()
@@ -452,13 +452,13 @@ def test_nonholomorphic_via_circuit():
     assert jnp.allclose(jnp.abs(S), jnp.abs(S_std), atol=1e-6)
 
 
-def test_nonholomorphic_jit(waveguide_netlist):
-    """jax.jit works with the nonholomorphic AC sweep."""
+def test_non_holomorphic_jit(waveguide_netlist):
+    """jax.jit works with the non-holomorphic AC sweep."""
     net_dict, models_map = waveguide_netlist
     groups, num_vars, pmap = compile_netlist(net_dict, models_map)
     solver = analyze_circuit(groups, num_vars, is_complex=True)
     y_dc = solver.solve_dc(groups, jnp.zeros(num_vars * 2))
-    run_ac = setup_ac_sweep(groups, num_vars, [pmap["WG1,p1"]], z0=_OPT_Z0, nonholomorphic=True)
+    run_ac = setup_ac_sweep(groups, num_vars, [pmap["WG1,p1"]], z0=_OPT_Z0, holomorphic=False)
     freqs = jnp.logspace(6, 10, 10)
     S_eager = run_ac(y_dc, freqs)
     S_jit = jax.jit(run_ac)(y_dc, freqs)

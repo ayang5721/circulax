@@ -57,7 +57,7 @@ def setup_ac_sweep(
     *,
     z0: float = 50.0,
     is_complex: bool = False,
-    nonholomorphic: bool = False,
+    holomorphic: bool = True,
 ) -> Callable[[Array, Array], Array]:
     """Configure and return a callable for AC small-signal S-parameter sweep.
 
@@ -96,11 +96,11 @@ def setup_ac_sweep(
         is_complex: If ``True``, use complex-valued assembly for photonic
             circuits.  The DC operating point ``y_dc`` is expected in unrolled
             block format (shape ``(2 * num_vars,)``).
-        nonholomorphic: If ``True``, use the full 2N×2N real-block system
-            instead of the N×N Wirtinger system.  Required when any component
-            uses non-holomorphic operations (e.g. ``jnp.real()``,
-            ``jnp.abs()``), which couple the field and its conjugate and make
-            the Wirtinger system incomplete.  Implies ``is_complex=True``.
+        holomorphic: If ``True`` (default), use the N×N Wirtinger system for
+            complex circuits.  Set to ``False`` when any component uses
+            non-holomorphic operations (e.g. ``jnp.real()``, ``jnp.abs()``),
+            which couple the field and its conjugate — the full 2N×2N
+            real-block system is then needed.  Implies ``is_complex=True``.
 
     Returns:
         A callable ``run_ac(y_dc, freqs) -> S`` where:
@@ -114,14 +114,14 @@ def setup_ac_sweep(
         Compatible with :func:`jax.jit` and :func:`jax.vmap` over ``y_dc``.
 
     """
-    if nonholomorphic:
+    if not holomorphic:
         is_complex = True
 
     if 0 in port_nodes:
         msg = "Port node cannot be the ground node (index 0)."
         raise ValueError(msg)
 
-    if nonholomorphic:
+    if not holomorphic:
         return _setup_ac_sweep_2n(groups, num_vars, port_nodes, z0=z0)
 
     # --- Pre-compute static COO index arrays (captured in closure) -----------
