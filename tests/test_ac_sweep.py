@@ -463,3 +463,170 @@ def test_non_holomorphic_jit(waveguide_netlist):
     S_eager = run_ac(y_dc, freqs)
     S_jit = jax.jit(run_ac)(y_dc, freqs)
     assert jnp.allclose(S_eager, S_jit, atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Ring modulator: holomorphic=False required for EO power modulation
+# ---------------------------------------------------------------------------
+
+
+def _ring_modulator_circuit():
+    """Build a ring modulator circuit with non-holomorphic jnp.real()."""
+    import numpy as np
+
+    from circulax.circuit import compile_circuit
+    from circulax.components.base_component import component, source
+    from circulax.components.electronic import Capacitor, Resistor
+
+    @source(ports=("p1", "p2"), states=("i_src",))
+    def OpticalCW(signals, s, t, power=1.0, phase=0.0):
+        amp = jnp.sqrt(power) * jnp.exp(1j * phase)
+        return {"p1": s.i_src, "p2": -s.i_src, "i_src": (signals.p1 - signals.p2) - amp}, {}
+
+    @source(ports=("p1", "p2"), states=("i_src",))
+    def DCVoltage(signals, s, t, V_dc=-2.0):
+        return {"p1": s.i_src, "p2": -s.i_src, "i_src": (signals.p1 - signals.p2) - V_dc}, {}
+
+    @component(ports=("p1", "p2", "v_e"), states=("a", "i_out"))
+    def RingEO(signals, s, ng=3.8, L=3.14159265e-5, gamma=0.976, alpha0=0.969,
+               alpha1=0.0, f_operating=2.2904e14, f_resonance=2.2901e14, v_to_wr=0.0):
+        c_val = 2.998e8
+        voltage = jnp.real(signals.v_e)  # <-- non-holomorphic
+        tau_e = 2 * ng * L / ((1 - gamma**2) * c_val)
+        alpha_v = alpha0 + alpha1 * voltage
+        tau_l = 2 * ng * L / ((1 - alpha_v**2) * c_val)
+        tau = 1 / (1 / tau_e + 1 / tau_l)
+        coupling = jnp.sqrt(2 / tau_e)
+        delta_omega = 2 * jnp.pi * (f_operating - f_resonance) + v_to_wr * voltage
+        rhs_a = -1j * coupling * signals.p1 + 1j * delta_omega * s.a - s.a / tau
+        E_o = signals.p1 - 1j * coupling * s.a
+        return {"p1": 0 + 0j, "p2": s.i_out, "v_e": 0 + 0j, "i_out": signals.p2 - E_o, "a": -rhs_a}, {"a": s.a}
+
+    c = 2.998e8
+    ng = 3.8
+    L_ring = float(2 * np.pi * 5e-6)
+    gamma = 0.976
+    alpha0 = 0.969
+    f_res = c / 1310e-9
+    f_op = c / 1309.7e-9
+    V_bias = -2.0
+    R_s = 100.0
+    C_j = 100e-15
+    v_to_wr = 2 * np.pi * 2e9
+
+    models_map = {
+        "ground": lambda: 0, "optical_cw": OpticalCW, "dc_voltage": DCVoltage,
+        "ring_eo": RingEO, "resistor": Resistor, "capacitor": Capacitor,
+    }
+    net_dict = {
+        "instances": {
+            "GND": {"component": "ground"},
+            "OptSrc": {"component": "optical_cw", "settings": {"power": 1.0}},
+            "Ring": {"component": "ring_eo", "settings": {
+                "ng": ng, "L": L_ring, "gamma": gamma, "alpha0": alpha0,
+                "f_operating": float(f_op), "f_resonance": float(f_res), "v_to_wr": v_to_wr}},
+            "Load": {"component": "resistor", "settings": {"R": 1.0}},
+            "Vsrc": {"component": "dc_voltage", "settings": {"V_dc": V_bias}},
+            "Rs": {"component": "resistor", "settings": {"R": R_s}},
+            "Cj": {"component": "capacitor", "settings": {"C": C_j}},
+        },
+        "connections": {
+            "GND,p1": ("OptSrc,p2", "Load,p2", "Vsrc,p2", "Cj,p2"),
+            "OptSrc,p1": "Ring,p1", "Ring,p2": "Load,p1",
+            "Vsrc,p1": "Rs,p1", "Rs,p2": ("Cj,p1", "Ring,v_e"),
+        },
+        "ports": {"in": "Ring,p1", "out": "Ring,p2", "ve": "Ring,v_e"},
+    }
+    circuit = compile_circuit(net_dict, models_map, is_complex=True)
+    y_dc = circuit.dc()
+
+    # Analytic parameters for the power modulation transfer
+    tau_e = 2 * ng * L_ring / ((1 - gamma**2) * c)
+    tau_l = 2 * ng * L_ring / ((1 - alpha0**2) * c)
+    tau = 1 / (1 / tau_e + 1 / tau_l)
+    delta_omega_dc = 2 * np.pi * (float(f_op) - float(f_res)) + v_to_wr * V_bias
+    f_RC = 1 / (2 * np.pi * R_s * C_j)
+
+    return circuit, y_dc, tau, tau_l, delta_omega_dc, R_s, C_j
+
+
+def test_non_holomorphic_ring_modulator_matches_analytic():
+    """holomorphic=False matches analytic EO power modulation; holomorphic=True does not."""
+    import numpy as np
+
+    from circulax.solvers.assembly import assemble_gc_complex, assemble_gc_complex_2n
+    from circulax.solvers.linear import GROUND_STIFFNESS, _build_index_arrays
+
+    circuit, y_dc, tau, tau_l, delta_omega_dc, R_s, C_j = _ring_modulator_circuit()
+    groups = circuit.groups
+    N = circuit.sys_size
+    pmap = circuit.port_map
+
+    freqs_hz = jnp.array(np.linspace(1e9, 80e9, 10))
+    omega_m = 2 * np.pi * np.array(freqs_hz)
+
+    # ── Analytic transfer ─────────────────────────────────────────────
+    inv_tau, inv_tau_l = 1 / tau, 1 / tau_l
+    H_RC = 1 / (1 + 1j * omega_m * R_s * C_j)
+    H_opt = (1j * omega_m + 2 * inv_tau_l) / (
+        -(omega_m**2) + 1j * 2 * inv_tau * omega_m + delta_omega_dc**2 + inv_tau**2
+    )
+    H_analytic = np.abs(H_RC * H_opt)
+    H_analytic_norm = H_analytic / H_analytic[0]
+    H_analytic_dB = 20 * np.log10(H_analytic_norm)
+
+    # ── holomorphic=False (2N block) ──────────────────────────────────
+    rows_n, cols_n, gidxs_n, _ = _build_index_arrays(groups, N, is_complex=False)
+    G_blocks, C_blocks = assemble_gc_complex_2n(y_dc, groups)
+    rows_j = jnp.array(rows_n)
+    cols_j = jnp.array(cols_n)
+    gidxs_2n = jnp.concatenate([jnp.array(gidxs_n), jnp.array(gidxs_n) + N])
+    offsets = jnp.array([[0, 0], [0, N], [N, 0], [N, N]])
+
+    drive_idx = pmap["Vsrc,i_src"]
+    probe_idx = pmap["out"]
+    E_dc = y_dc[probe_idx] + 1j * y_dc[probe_idx + N]
+    rhs_2n = jnp.zeros(2 * N, dtype=jnp.complex128).at[drive_idx].set(1.0)
+
+    def eo_power_mod_2n(f):
+        w = 2.0 * jnp.pi * f
+        Y = jnp.zeros((2 * N, 2 * N), dtype=jnp.complex128)
+        for k in range(4):
+            ro, co = offsets[k]
+            Y = Y.at[rows_j + ro, cols_j + co].add(
+                (G_blocks[k] + 1j * w * C_blocks[k]).astype(jnp.complex128)
+            )
+        Y = Y.at[gidxs_2n, gidxs_2n].add(GROUND_STIFFNESS)
+        x = jnp.linalg.solve(Y, rhs_2n)
+        dy_R, dy_I = x[:N], x[N:]
+        H_plus = dy_R[probe_idx] + 1j * dy_I[probe_idx]
+        H_minus_conj = dy_R[probe_idx] - 1j * dy_I[probe_idx]
+        return jnp.abs(jnp.conj(E_dc) * H_plus + E_dc * H_minus_conj)
+
+    dP_2n = jax.vmap(eo_power_mod_2n)(freqs_hz)
+    dP_2n_norm = np.array(dP_2n / dP_2n[0])
+    dP_2n_dB = 20 * np.log10(dP_2n_norm)
+
+    # ── holomorphic=True (N×N Wirtinger) ──────────────────────────────
+    G_w, C_w = assemble_gc_complex(y_dc, groups)
+    rhs_n = jnp.zeros(N, dtype=jnp.complex128).at[drive_idx].set(1.0)
+    gidxs_j = jnp.array(gidxs_n)
+
+    def eo_power_mod_wirtinger(f):
+        w = 2.0 * jnp.pi * f
+        Y = jnp.zeros((N, N), dtype=jnp.complex128)
+        Y = Y.at[rows_j, cols_j].add(G_w + 1j * w * C_w)
+        Y = Y.at[gidxs_j, gidxs_j].add(GROUND_STIFFNESS)
+        x = jnp.linalg.solve(Y, rhs_n)
+        return jnp.abs(jnp.conj(E_dc) * x[probe_idx] + E_dc * jnp.conj(x[probe_idx]))
+
+    dP_w = jax.vmap(eo_power_mod_wirtinger)(freqs_hz)
+    dP_w_norm = np.array(dP_w / dP_w[0])
+    dP_w_dB = 20 * np.log10(dP_w_norm)
+
+    # ── Assertions ────────────────────────────────────────────────────
+    err_2n = float(jnp.max(jnp.abs(jnp.array(dP_2n_dB) - jnp.array(H_analytic_dB))))
+    err_w = float(jnp.max(jnp.abs(jnp.array(dP_w_dB) - jnp.array(H_analytic_dB))))
+
+    assert err_2n < 0.01, f"holomorphic=False should match analytic, got {err_2n:.2f} dB error"
+    assert err_w > 1.0, f"holomorphic=True should NOT match power modulation, got only {err_w:.2f} dB error"
