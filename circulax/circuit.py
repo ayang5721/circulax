@@ -313,16 +313,8 @@ class Circuit:
         Returns:
             Complex S-parameter array of shape ``(len(freqs), n_ports, n_ports)``.
 
-        Raises:
-            ValueError: If the circuit is complex-valued (photonic). Use the
-                low-level ``setup_ac_sweep`` API for complex circuits.
-
         """
         from circulax.solvers import setup_ac_sweep
-
-        if self.solver.is_complex:
-            msg = "Circuit.ac() currently supports real-valued circuits. Use the low-level AC API for custom paths."
-            raise ValueError(msg)
 
         updates = self._coerce_param_updates(params, param_updates)
         arrays = self._require_scalar_params(updates, "ac")
@@ -337,7 +329,7 @@ class Circuit:
             )
         port_list = [ports] if isinstance(ports, str) else list(ports)
         port_nodes = [self._resolve_port_node(port) for port in port_list]
-        run_ac = setup_ac_sweep(groups, self.sys_size, port_nodes, z0=z0)
+        run_ac = setup_ac_sweep(groups, self.sys_size, port_nodes, z0=z0, is_complex=self.solver.is_complex)
         return run_ac(y_dc, jnp.asarray(freqs))
 
     def hb(

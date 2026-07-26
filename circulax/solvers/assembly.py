@@ -423,6 +423,72 @@ def assemble_gc_real(
     return jnp.concatenate(g_vals_list), jnp.concatenate(c_vals_list)
 
 
+def assemble_gc_complex(
+    y_guess: Array,
+    component_groups: dict,
+) -> tuple[Array, Array]:
+    """Return separate complex G and C COO value arrays at the linearisation point.
+
+    Complex counterpart of :func:`assemble_gc_real`.  The input state vector is
+    in unrolled block format (real parts followed by imaginary parts, shape
+    ``(2 * num_vars,)``).  Returns **complex128** COO value arrays aligned with
+    the **N-sized** (not 2N) index arrays from ``_build_index_arrays(...,
+    is_complex=False)``, suitable for building an N x N complex admittance
+    matrix in the AC sweep.
+
+    The complex Jacobian is recovered from the four real Jacobian blocks via
+    the Wirtinger formula::
+
+        J_complex = (1/2)(J_RR + J_II) + (j/2)(J_IR - J_RI)
+
+    For holomorphic functions this simplifies to ``J_RR + j * J_IR``; for
+    real-valued functions it reduces to ``J_RR + 0j``.
+
+    """
+    half = y_guess.shape[0] // 2
+    y_real, y_imag = y_guess[:half], y_guess[half:]
+
+    g_vals_list: list[Array] = []
+    c_vals_list: list[Array] = []
+
+    for k in sorted(component_groups.keys()):
+        group = component_groups[k]
+        n_entries = int(jnp.array(group.jac_rows).reshape(-1).shape[0])
+
+        if _is_osdi(group):
+            g_sep, c_sep = _assemble_osdi_gc_separate(y_real, group)
+            g_vals_list.append(g_sep.reshape(-1).astype(jnp.complex128))
+            c_vals_list.append(c_sep.reshape(-1).astype(jnp.complex128))
+            continue
+
+        if group.is_fdomain:
+            g_vals_list.append(jnp.zeros(n_entries, dtype=jnp.complex128))
+            c_vals_list.append(jnp.zeros(n_entries, dtype=jnp.complex128))
+            continue
+
+        v_r, v_i = y_real[group.var_indices], y_imag[group.var_indices]
+
+        if group.combined_func is not None:
+            _, _, df_l, dq_l = jax.vmap(lambda v, p: group.combined_func(v, p, 0.0))(v_r, group.params)
+            g_vals_list.append(df_l.reshape(-1).astype(jnp.complex128))
+            c_vals_list.append(dq_l.reshape(-1).astype(jnp.complex128))
+            continue
+
+        physics_split = functools.partial(_complex_physics, group=group, t1=0.0)
+
+        (_, _, _, _), (dfr_r, dfi_r, dqr_r, dqi_r), (dfr_i, dfi_i, dqr_i, dqi_i) = jax.vmap(
+            functools.partial(_primal_and_jac_complex, physics_split)
+        )(v_r, v_i, group.params)
+
+        g_complex = 0.5 * (dfr_r + dfi_i) + 0.5j * (dfi_r - dfr_i)
+        c_complex = 0.5 * (dqr_r + dqi_i) + 0.5j * (dqi_r - dqr_i)
+
+        g_vals_list.append(g_complex.reshape(-1))
+        c_vals_list.append(c_complex.reshape(-1))
+
+    return jnp.concatenate(g_vals_list), jnp.concatenate(c_vals_list)
+
+
 def assemble_residual_only_real(
     y_guess: Array,
     component_groups: dict,

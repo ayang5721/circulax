@@ -23,7 +23,8 @@ REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(HERE.parent))
-from _paths import vacask_bin as _vacask_bin, vacask_repo as _vacask_repo  # noqa: E402
+from _paths import vacask_bin as _vacask_bin  # noqa: E402
+from _paths import vacask_repo as _vacask_repo
 
 UPSTREAM = _vacask_repo() / "benchmark" / "mul"
 CSV_PATH = HERE / "results.csv"

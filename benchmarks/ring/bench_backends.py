@@ -59,7 +59,8 @@ REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(HERE.parent))
-from _paths import klujax_rs_path as _klujax_rs_path, vacask_repo as _vacask_repo  # noqa: E402
+from _paths import klujax_rs_path as _klujax_rs_path  # noqa: E402
+from _paths import vacask_repo as _vacask_repo
 
 try:
     sys.path.insert(0, str(_vacask_repo() / "python"))

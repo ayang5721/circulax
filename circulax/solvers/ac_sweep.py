@@ -46,7 +46,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from circulax.solvers.assembly import assemble_gc_real
+from circulax.solvers.assembly import assemble_gc_complex, assemble_gc_real
 from circulax.solvers.linear import GROUND_STIFFNESS, _build_index_arrays
 
 
@@ -56,6 +56,7 @@ def setup_ac_sweep(
     port_nodes: list[int],
     *,
     z0: float = 50.0,
+    is_complex: bool = False,
 ) -> Callable[[Array, Array], Array]:
     """Configure and return a callable for AC small-signal S-parameter sweep.
 
@@ -91,11 +92,15 @@ def setup_ac_sweep(
 
         z0: Reference impedance in ohms, applied uniformly to all ports.
             Defaults to 50.0.
+        is_complex: If ``True``, use complex-valued assembly for photonic
+            circuits.  The DC operating point ``y_dc`` is expected in unrolled
+            block format (shape ``(2 * num_vars,)``).
 
     Returns:
         A callable ``run_ac(y_dc, freqs) -> S`` where:
 
-        - **y_dc** — DC operating point, shape ``(num_vars,)``.
+        - **y_dc** — DC operating point, shape ``(num_vars,)`` for real
+          circuits or ``(2 * num_vars,)`` for complex circuits.
         - **freqs** — frequencies in Hz, shape ``(N_freqs,)``.
         - **S** — S-parameter matrix, shape ``(N_freqs, N_ports, N_ports)``
             complex128.
@@ -108,6 +113,9 @@ def setup_ac_sweep(
         raise ValueError(msg)
 
     # --- Pre-compute static COO index arrays (captured in closure) -----------
+    # Always use N-sized indices -- AC works in complex NxN space even for
+    # complex circuits (the 2N block representation is only needed for the
+    # real-valued sparse solvers used in DC/transient).
     static_rows, static_cols, ground_idxs, _ = _build_index_arrays(groups, num_vars, is_complex=False)
     static_rows_jax = jnp.array(static_rows)
     static_cols_jax = jnp.array(static_cols)
@@ -127,24 +135,27 @@ def setup_ac_sweep(
         if groups[gk].is_fdomain
     }
 
+    gc_assemble = assemble_gc_complex if is_complex else assemble_gc_real
+
     # -------------------------------------------------------------------------
     def run_ac(y_dc: Array, freqs: Array) -> Array:
         """Sweep AC frequencies and return the S-parameter matrix.
 
         Args:
-            y_dc: DC operating point, shape ``(num_vars,)``.
+            y_dc: DC operating point, shape ``(num_vars,)`` for real circuits
+                or ``(2 * num_vars,)`` for complex circuits.
             freqs: Frequencies in Hz, shape ``(N_freqs,)``.
 
         Returns:
             S-parameter matrix, shape ``(N_freqs, N_ports, N_ports)`` complex128.
 
         """
-        G_vals, C_vals = assemble_gc_real(y_dc, groups)
+        G_vals, C_vals = gc_assemble(y_dc, groups)
 
-        G_mat = jnp.zeros((num_vars, num_vars), dtype=jnp.float64)
+        G_mat = jnp.zeros((num_vars, num_vars), dtype=jnp.complex128)
         G_mat = G_mat.at[static_rows_jax, static_cols_jax].add(G_vals)
 
-        C_mat = jnp.zeros((num_vars, num_vars), dtype=jnp.float64)
+        C_mat = jnp.zeros((num_vars, num_vars), dtype=jnp.complex128)
         C_mat = C_mat.at[static_rows_jax, static_cols_jax].add(C_vals)
 
         # RHS column p: 2/z0 at port_nodes[p], zero elsewhere.
@@ -153,7 +164,7 @@ def setup_ac_sweep(
 
         def _solve_one_freq(f: Array) -> Array:
             omega = 2.0 * jnp.pi * f
-            Y = G_mat.astype(jnp.complex128) + 1j * omega * C_mat.astype(jnp.complex128)
+            Y = G_mat + 1j * omega * C_mat
 
             # Add frequency-domain component admittances.
             # The Python loop is over static strings — safe inside vmap.

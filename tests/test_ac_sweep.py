@@ -263,3 +263,126 @@ def test_ac_sweep_ground_node_raises(rc_netlist):
     groups, num_vars, _ = compile_netlist(net_dict, models_map)
     with pytest.raises(ValueError, match="ground"):
         setup_ac_sweep(groups, num_vars, [0], z0=_Z0)
+
+
+# ---------------------------------------------------------------------------
+# Complex (photonic) AC sweep
+# ---------------------------------------------------------------------------
+
+_OPT_Z0 = 1.0
+
+
+@pytest.fixture
+def waveguide_netlist():
+    """Two-port lossless waveguide circuit for complex AC tests.
+
+    The waveguide S-matrix is [[0, T], [T, 0]] where T = exp(-j*phi).
+    No sources — pure passive photonic component.
+    """
+    from circulax.components.photonic import OpticalWaveguide
+
+    models_map = {
+        "waveguide": OpticalWaveguide,
+        "ground": lambda: 0,
+    }
+    net_dict = {
+        "instances": {
+            "GND": {"component": "ground"},
+            "WG1": {
+                "component": "waveguide",
+                "settings": {
+                    "length_um": 100.0,
+                    "loss_dB_cm": 0.0,
+                    "neff": 2.4,
+                    "n_group": 4.0,
+                    "center_wavelength_nm": 1310.0,
+                    "wavelength_nm": 1310.0,
+                },
+            },
+        },
+        "connections": {
+            "WG1,p2": "GND,p1",
+        },
+        "ports": {"in": "WG1,p1"},
+    }
+    return net_dict, models_map
+
+
+@pytest.fixture
+def waveguide_complex_setup(waveguide_netlist):
+    """Compiled complex waveguide circuit with DC solution and run_ac callable."""
+    net_dict, models_map = waveguide_netlist
+    groups, num_vars, pmap = compile_netlist(net_dict, models_map)
+    solver = analyze_circuit(groups, num_vars, is_complex=True)
+    sys_size = num_vars * 2
+    y_dc = solver.solve_dc(groups, jnp.zeros(sys_size))
+    port_nodes = [pmap["WG1,p1"]]
+    run_ac = setup_ac_sweep(groups, num_vars, port_nodes, z0=_OPT_Z0, is_complex=True)
+    return run_ac, y_dc
+
+
+def test_complex_ac_sweep_shapes(waveguide_complex_setup):
+    """Complex AC run_ac returns (N_freqs, N_ports, N_ports) complex array."""
+    run_ac, y_dc = waveguide_complex_setup
+    freqs = jnp.logspace(6, 10, 20)
+    S = run_ac(y_dc, freqs)
+    assert S.shape == (len(freqs), 1, 1)
+    assert jnp.iscomplexobj(S)
+
+
+def test_complex_ac_sweep_finite(waveguide_complex_setup):
+    """All S-parameter values are finite."""
+    run_ac, y_dc = waveguide_complex_setup
+    freqs = jnp.logspace(6, 10, 20)
+    S = run_ac(y_dc, freqs)
+    assert jnp.isfinite(jnp.abs(S)).all()
+
+
+def test_complex_ac_sweep_passivity(waveguide_complex_setup):
+    """Passive photonic circuit satisfies |S11| <= 1 at all frequencies."""
+    run_ac, y_dc = waveguide_complex_setup
+    freqs = jnp.logspace(6, 10, 50)
+    S = run_ac(y_dc, freqs)
+    assert (jnp.abs(S[:, 0, 0]) <= 1.0 + 1e-6).all()
+
+
+def test_complex_ac_sweep_jit(waveguide_complex_setup):
+    """jax.jit(run_ac) matches the eager result for complex circuits."""
+    run_ac, y_dc = waveguide_complex_setup
+    freqs = jnp.logspace(6, 10, 20)
+    S_eager = run_ac(y_dc, freqs)
+    S_jit = jax.jit(run_ac)(y_dc, freqs)
+    assert jnp.allclose(S_eager, S_jit, atol=1e-10)
+
+
+def test_complex_ac_sweep_via_circuit():
+    """Circuit.ac() works for complex-valued (photonic) circuits."""
+    from circulax.circuit import compile_circuit
+    from circulax.components.photonic import OpticalWaveguide
+
+    models_map = {
+        "waveguide": OpticalWaveguide,
+        "ground": lambda: 0,
+    }
+    net_dict = {
+        "instances": {
+            "GND": {"component": "ground"},
+            "WG1": {
+                "component": "waveguide",
+                "settings": {
+                    "length_um": 100.0,
+                    "loss_dB_cm": 0.0,
+                },
+            },
+        },
+        "connections": {
+            "WG1,p2": "GND,p1",
+        },
+        "ports": {"in": "WG1,p1"},
+    }
+    circuit = compile_circuit(net_dict, models_map, is_complex=True)
+    freqs = jnp.logspace(6, 10, 10)
+    S = circuit.ac(ports="in", freqs=freqs, z0=_OPT_Z0)
+    assert S.shape == (len(freqs), 1, 1)
+    assert jnp.iscomplexobj(S)
+    assert jnp.isfinite(jnp.abs(S)).all()
