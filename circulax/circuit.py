@@ -519,6 +519,8 @@ def compile_circuit(
     elif not isinstance(is_complex, bool):
         msg = "is_complex must be True, False, or 'auto'."
         raise ValueError(msg)
+    if is_complex:
+        _validate_holomorphic_flags(groups)
     solver = analyze_circuit(groups, sys_size, backend=backend, is_complex=is_complex, g_leak=g_leak)
     return Circuit(
         solver=solver,
@@ -534,6 +536,41 @@ def compile_circuit(
 def _infer_holomorphic(groups: dict) -> bool:
     """Return ``True`` if all component groups are holomorphic."""
     return all(getattr(group, "holomorphic", True) for group in groups.values())
+
+
+def _validate_holomorphic_flags(groups: dict) -> None:
+    """Warn about components marked holomorphic=True that use non-holomorphic ops.
+
+    Only called for complex-valued circuits where holomorphicity matters.
+    Traces each group's physics with complex inputs and inspects the jaxpr.
+    """
+    from circulax.components.base_component import _jaxpr_has_non_holomorphic
+
+    for name, group in groups.items():
+        if not getattr(group, "holomorphic", True):
+            continue
+        if getattr(group, "is_fdomain", False):
+            continue
+        try:
+            n_vars = group.var_indices.shape[1]
+            count = group.var_indices.shape[0]
+            vars_vec = jnp.zeros(n_vars, dtype=jnp.complex128)
+            params0 = jax.tree.map(
+                lambda x: x[0] if hasattr(x, "shape") and x.shape[:1] == (count,) else x,
+                group.params,
+            )
+            closed_jaxpr = jax.make_jaxpr(group.physics_func, static_argnums=(0,))(0.0, vars_vec, params0)
+            bad_ops = _jaxpr_has_non_holomorphic(closed_jaxpr.jaxpr)
+            if bad_ops:
+                ops_str = ", ".join(sorted(bad_ops))
+                warnings.warn(
+                    f"Component group '{name}' is marked holomorphic=True but "
+                    f"uses non-holomorphic operations: {ops_str}. Set "
+                    f"holomorphic=False on its @component/@source decorator.",
+                    stacklevel=3,
+                )
+        except Exception:
+            pass
 
 
 def _infer_is_complex(groups: dict) -> bool:

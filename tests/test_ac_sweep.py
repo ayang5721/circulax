@@ -742,3 +742,67 @@ def test_holomorphic_auto_detection():
     S_auto = circuit.sp(ports="out", freqs=freqs, z0=50.0, y_dc=y_dc)
     S_explicit = circuit.sp(ports="out", freqs=freqs, z0=50.0, y_dc=y_dc, holomorphic=False)
     assert jnp.allclose(S_auto, S_explicit, atol=1e-12), "auto-detected should match explicit holomorphic=False"
+
+
+def test_holomorphic_jaxpr_validation_warns():
+    """compile_circuit warns when holomorphic=True component uses non-holomorphic ops in a complex circuit."""
+    import warnings
+
+    from circulax.circuit import compile_circuit
+    from circulax.components.base_component import component
+    from circulax.components.photonic import OpticalWaveguide
+
+    @component(ports=("p1", "p2"))
+    def _BadPhotodetector(signals, s, R=1.0):
+        power = jnp.real(signals.p1 * jnp.conj(signals.p1))
+        i_photo = power * R
+        return {"p1": 0 + 0j, "p2": i_photo}, {}
+
+    models_map = {
+        "ground": lambda: 0,
+        "waveguide": OpticalWaveguide,
+        "bad_pd": _BadPhotodetector,
+    }
+    net_dict = {
+        "instances": {
+            "GND": {"component": "ground"},
+            "WG1": {"component": "waveguide", "settings": {"neff": 2.5, "ng": 3.5, "length": 1e-4, "loss": 0.0}},
+            "PD": {"component": "bad_pd", "settings": {"R": 0.8}},
+        },
+        "connections": {"GND,p1": ("WG1,p2", "PD,p2"), "WG1,p1": "PD,p1"},
+    }
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        compile_circuit(net_dict, models_map, is_complex=True)
+
+    matches = [x for x in w if "non-holomorphic" in str(x.message) and "bad_pd" in str(x.message).lower()]
+    assert len(matches) == 1, f"Expected 1 holomorphic warning for bad_pd, got {len(matches)}: {[str(x.message) for x in matches]}"
+    assert "real" in str(matches[0].message) or "conj" in str(matches[0].message)
+
+
+def test_holomorphic_jaxpr_validation_no_false_positive():
+    """Electronic-only circuits do not trigger false holomorphic warnings."""
+    import warnings
+
+    from circulax.circuit import compile_circuit
+    from circulax.components.electronic import Capacitor, Resistor
+
+    models_map = {
+        "ground": lambda: 0,
+        "resistor": Resistor,
+        "capacitor": Capacitor,
+    }
+    net_dict = {
+        "instances": {
+            "GND": {"component": "ground"},
+            "R1": {"component": "resistor", "settings": {"R": 50.0}},
+            "C1": {"component": "capacitor", "settings": {"C": 1e-12}},
+        },
+        "connections": {"R1,p1": "C1,p1", "R1,p2": "GND,p1", "C1,p2": "GND,p1"},
+    }
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        compile_circuit(net_dict, models_map)
+
+    matches = [x for x in w if "non-holomorphic" in str(x.message)]
+    assert len(matches) == 0, f"Unexpected holomorphic warning for real circuit: {matches}"

@@ -244,6 +244,33 @@ def _extract_param(container: Any, name: str) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Holomorphic validation via jaxpr inspection
+# ---------------------------------------------------------------------------
+_NON_HOLOMORPHIC_PRIMITIVES = frozenset({"real", "imag", "conj", "abs"})
+
+
+def _jaxpr_has_non_holomorphic(jaxpr: Any) -> set[str]:
+    """Walk a jaxpr and return names of non-holomorphic primitives on traced variables."""
+    from jax._src.core import ClosedJaxpr, Jaxpr, Literal
+
+    found: set[str] = set()
+    for eqn in jaxpr.eqns:
+        if eqn.primitive.name in _NON_HOLOMORPHIC_PRIMITIVES:
+            has_traced_complex_input = any(
+                not isinstance(v, Literal) and hasattr(v.aval, "dtype") and jnp.issubdtype(v.aval.dtype, jnp.complexfloating)
+                for v in eqn.invars
+            )
+            if has_traced_complex_input:
+                found.add(eqn.primitive.name)
+        for v in eqn.params.values():
+            if isinstance(v, Jaxpr):
+                found |= _jaxpr_has_non_holomorphic(v)
+            elif isinstance(v, ClosedJaxpr):
+                found |= _jaxpr_has_non_holomorphic(v.jaxpr)
+    return found
+
+
+# ---------------------------------------------------------------------------
 # The Builder
 # ---------------------------------------------------------------------------
 def _build_component(  # noqa: C901
