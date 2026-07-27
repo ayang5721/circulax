@@ -14,7 +14,7 @@ from circulax.s_transforms import s_to_y
 # ===========================================================================
 
 
-@component(ports=("p1", "p2"))
+@component(ports=("p1", "p2"), holomorphic=True)
 def OpticalWaveguide(
     signals: Signals,
     s: States,
@@ -69,7 +69,7 @@ def OpticalWaveguide(
     return {"p1": i_vec[0], "p2": i_vec[1]}, {}
 
 
-@component(ports=("grating", "waveguide"))
+@component(ports=("grating", "waveguide"), holomorphic=True)
 def Grating(
     signals: Signals,
     s: States,
@@ -110,7 +110,7 @@ def Grating(
     return {"grating": i_vec[0], "waveguide": i_vec[1]}, {}
 
 
-@component(ports=("p1", "p2", "p3"))
+@component(ports=("p1", "p2", "p3"), holomorphic=True)
 def Splitter(signals: Signals, s: States, split_ratio: float = 0.5) -> PhysicsReturn:
     """Lossless asymmetric optical splitter (Y-junction) with a configurable power split ratio.
 
@@ -139,7 +139,7 @@ def Splitter(signals: Signals, s: States, split_ratio: float = 0.5) -> PhysicsRe
     return {"p1": i_vec[0], "p2": i_vec[1], "p3": i_vec[2]}, {}
 
 
-@component(ports=("p1", "p2", "p3", "p4"))
+@component(ports=("p1", "p2", "p3", "p4"), holomorphic=True)
 def DirectionalCoupler(
     signals: Signals,
     s: States,
@@ -196,7 +196,7 @@ def DirectionalCoupler(
 # ===========================================================================
 
 
-@component(ports=("p1", "p2"), states=("i_src",))
+@component(ports=("p1", "p2"), states=("i_src",), holomorphic=True)
 def OpticalSource(signals: Signals, s: States, power: float = 1.0, phase: float = 0.0) -> PhysicsReturn:
     """Ideal CW optical source for DC and small-signal AC analysis.
 
@@ -216,7 +216,7 @@ def OpticalSource(signals: Signals, s: States, power: float = 1.0, phase: float 
     return {"p1": s.i_src, "p2": -s.i_src, "i_src": constraint}, {}
 
 
-@source(ports=("p1", "p2"), states=("i_src",))
+@source(ports=("p1", "p2"), states=("i_src",), holomorphic=True)
 def OpticalSourcePulse(
     signals: Signals,
     s: States,
@@ -255,7 +255,7 @@ def OpticalSourcePulse(
 # ===========================================================================
 
 
-@component(ports=("p1", "p2", "p3", "p4"), states=("i_top", "i_bot"))
+@component(ports=("p1", "p2", "p3", "p4"), states=("i_top", "i_bot"), holomorphic=True)
 def TunableBeamSplitter(
     signals: Signals,
     s: States,

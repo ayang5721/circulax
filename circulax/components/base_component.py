@@ -93,7 +93,7 @@ class CircuitComponent(eqx.Module):
 
     _uses_time: ClassVar[bool] = False
     _is_fdomain: ClassVar[bool] = False
-    _holomorphic: ClassVar[bool] = True
+    _holomorphic: ClassVar[bool] = False
 
     _VarsType_P: ClassVar[Any] = None
     _VarsType_S: ClassVar[Any] = None
@@ -283,7 +283,7 @@ def _build_component(  # noqa: C901
     setup_fn: Any = None,
     differentiable_params: "tuple[str, ...] | None" = None,
     port_aliases: "dict[str, str | tuple[str, ...]] | None" = None,
-    holomorphic: bool = True,
+    holomorphic: bool = False,
 ) -> type[CircuitComponent]:
     """Compile a physics function into a :class:`CircuitComponent` subclass.
 
@@ -595,7 +595,7 @@ def component(
     states: tuple[str, ...] = (),
     amplitude_param: str = "",
     port_aliases: "dict[str, str | tuple[str, ...]] | None" = None,
-    holomorphic: bool = True,
+    holomorphic: bool = False,
 ) -> Any:
     """Decorator for defining a time-independent circuit component.
 
@@ -619,12 +619,13 @@ def component(
             ``{"p1": "P", "p2": "N"}``. Lets integrators (e.g. Mosaic/kfnetlist)
             reuse this component's physics under their own port-naming
             convention without redefining it.
-        holomorphic: If ``True`` (default), the component's physics function
-            is holomorphic (complex-differentiable).  Set to ``False`` for
-            components that use non-holomorphic operations like ``jnp.real()``,
-            ``jnp.abs()``, or ``jnp.conj()`` — if *any* component in a circuit
-            is non-holomorphic, the AC sweep must use the full 2N×2N
-            real-block system.
+        holomorphic: If ``True``, the component's physics function is
+            holomorphic (complex-differentiable), enabling the faster N×N
+            Wirtinger AC solve.  Defaults to ``False`` (safe: the full 2N×2N
+            real-block system is always correct).  Set to ``True`` for
+            components whose physics uses only holomorphic operations — if
+            *every* component in a circuit is holomorphic, the AC sweep
+            uses the faster N×N path automatically.
 
     Returns:
         A decorator that accepts a physics function and returns a
@@ -648,7 +649,7 @@ def source(
     states: tuple[str, ...] = (),
     amplitude_param: str = "",
     port_aliases: "dict[str, str | tuple[str, ...]] | None" = None,
-    holomorphic: bool = True,
+    holomorphic: bool = False,
 ) -> Any:
     """Decorator for defining a time-dependent circuit component.
 
@@ -668,8 +669,8 @@ def source(
         port_aliases: Optional mapping from a canonical port name to one or
             more alternate names a netlist may use instead. See
             :func:`component`.
-        holomorphic: If ``True`` (default), the component's physics function
-            is holomorphic (complex-differentiable).  See :func:`component`.
+        holomorphic: If ``True``, the component's physics is holomorphic.
+            Defaults to ``False`` (safe).  See :func:`component`.
 
     Returns:
         A decorator that accepts a physics function and returns a

@@ -70,7 +70,7 @@ class ComponentGroup(eqx.Module):
     is_fdomain: bool = eqx.field(static=True, default=False)
     amplitude_param: str = eqx.field(static=True, default="")
     combined_func: Any = eqx.field(static=True, default=None)
-    holomorphic: bool = eqx.field(static=True, default=True)
+    holomorphic: bool = eqx.field(static=True, default=False)
 
 
 def get_model_width(func: callable) -> int:

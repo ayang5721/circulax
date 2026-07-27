@@ -576,12 +576,12 @@ def _ring_modulator_circuit():
     from circulax.components.base_component import component, source
     from circulax.components.electronic import Capacitor, Resistor
 
-    @source(ports=("p1", "p2"), states=("i_src",))
+    @source(ports=("p1", "p2"), states=("i_src",), holomorphic=True)
     def OpticalCW(signals, s, t, power=1.0, phase=0.0):
         amp = jnp.sqrt(power) * jnp.exp(1j * phase)
         return {"p1": s.i_src, "p2": -s.i_src, "i_src": (signals.p1 - signals.p2) - amp}, {}
 
-    @source(ports=("p1", "p2"), states=("i_src",))
+    @source(ports=("p1", "p2"), states=("i_src",), holomorphic=True)
     def DCVoltage(signals, s, t, V_dc=-2.0):
         return {"p1": s.i_src, "p2": -s.i_src, "i_src": (signals.p1 - signals.p2) - V_dc}, {}
 
@@ -752,7 +752,7 @@ def test_holomorphic_jaxpr_validation_warns():
     from circulax.components.base_component import component
     from circulax.components.photonic import OpticalWaveguide
 
-    @component(ports=("p1", "p2"))
+    @component(ports=("p1", "p2"), holomorphic=True)
     def _BadPhotodetector(signals, s, R=1.0):
         power = jnp.real(signals.p1 * jnp.conj(signals.p1))
         i_photo = power * R
