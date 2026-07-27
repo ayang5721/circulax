@@ -93,6 +93,7 @@ class CircuitComponent(eqx.Module):
 
     _uses_time: ClassVar[bool] = False
     _is_fdomain: ClassVar[bool] = False
+    _holomorphic: ClassVar[bool] = True
 
     _VarsType_P: ClassVar[Any] = None
     _VarsType_S: ClassVar[Any] = None
@@ -255,6 +256,7 @@ def _build_component(  # noqa: C901
     setup_fn: Any = None,
     differentiable_params: "tuple[str, ...] | None" = None,
     port_aliases: "dict[str, str | tuple[str, ...]] | None" = None,
+    holomorphic: bool = True,
 ) -> type[CircuitComponent]:
     """Compile a physics function into a :class:`CircuitComponent` subclass.
 
@@ -535,6 +537,7 @@ def _build_component(  # noqa: C901
         "_fast_physics": staticmethod(_fast_physics),
         "_invoke_physics": _invoke_physics,
         "_uses_time": uses_time,
+        "_holomorphic": holomorphic,
         "amplitude_param": amplitude_param,
         "_has_init_arg": has_init_arg,
         "_setup_fn_ref": None,
@@ -565,6 +568,7 @@ def component(
     states: tuple[str, ...] = (),
     amplitude_param: str = "",
     port_aliases: "dict[str, str | tuple[str, ...]] | None" = None,
+    holomorphic: bool = True,
 ) -> Any:
     """Decorator for defining a time-independent circuit component.
 
@@ -588,6 +592,12 @@ def component(
             ``{"p1": "P", "p2": "N"}``. Lets integrators (e.g. Mosaic/kfnetlist)
             reuse this component's physics under their own port-naming
             convention without redefining it.
+        holomorphic: If ``True`` (default), the component's physics function
+            is holomorphic (complex-differentiable).  Set to ``False`` for
+            components that use non-holomorphic operations like ``jnp.real()``,
+            ``jnp.abs()``, or ``jnp.conj()`` — if *any* component in a circuit
+            is non-holomorphic, the AC sweep must use the full 2N×2N
+            real-block system.
 
     Returns:
         A decorator that accepts a physics function and returns a
@@ -602,7 +612,7 @@ def component(
 
     """
     return lambda fn: _build_component(
-        fn, ports, states, uses_time=False, amplitude_param=amplitude_param, port_aliases=port_aliases
+        fn, ports, states, uses_time=False, amplitude_param=amplitude_param, port_aliases=port_aliases, holomorphic=holomorphic
     )
 
 
@@ -611,6 +621,7 @@ def source(
     states: tuple[str, ...] = (),
     amplitude_param: str = "",
     port_aliases: "dict[str, str | tuple[str, ...]] | None" = None,
+    holomorphic: bool = True,
 ) -> Any:
     """Decorator for defining a time-dependent circuit component.
 
@@ -630,6 +641,8 @@ def source(
         port_aliases: Optional mapping from a canonical port name to one or
             more alternate names a netlist may use instead. See
             :func:`component`.
+        holomorphic: If ``True`` (default), the component's physics function
+            is holomorphic (complex-differentiable).  See :func:`component`.
 
     Returns:
         A decorator that accepts a physics function and returns a
@@ -644,5 +657,5 @@ def source(
 
     """
     return lambda fn: _build_component(
-        fn, ports, states, uses_time=True, amplitude_param=amplitude_param, port_aliases=port_aliases
+        fn, ports, states, uses_time=True, amplitude_param=amplitude_param, port_aliases=port_aliases, holomorphic=holomorphic
     )

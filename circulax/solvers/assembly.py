@@ -506,6 +506,7 @@ def assemble_gc_complex_2n(
         ``(G_blocks, C_blocks)`` where each is a list of four JAX arrays
         ``[RR, RI, IR, II]``.  Each array contains the COO values aligned with
         the N-sized index arrays from ``_build_index_arrays(..., is_complex=False)``.
+
     """
     half = y_guess.shape[0] // 2
     y_real, y_imag = y_guess[:half], y_guess[half:]

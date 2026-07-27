@@ -293,7 +293,7 @@ class Circuit:
         freqs: jax.Array,
         z0: float | jax.Array = 50.0,
         y_dc: jax.Array | None = None,
-        holomorphic: bool = True,
+        holomorphic: bool | str = "auto",
         params: dict[str, Any] | None = None,
         **param_updates: Any,
     ) -> jax.Array:
@@ -310,10 +310,11 @@ class Circuit:
                 frequency-dependent impedance, solve at a fixed z0 and use
                 :func:`~circulax.solvers.renormalize` afterwards.
             y_dc: DC operating point. If ``None``, a DC solve is run first.
-            holomorphic: If ``True`` (default), use the N×N Wirtinger system.
-                Set to ``False`` when the circuit contains non-holomorphic
-                operations (e.g. ``jnp.real()``, ``jnp.abs()``) to use the
-                full 2N×2N real-block system.
+            holomorphic: If ``"auto"`` (default), infer from component flags —
+                if any component in the circuit has ``holomorphic=False``, the
+                full 2N×2N real-block system is used.  Pass ``True`` to force
+                the N×N Wirtinger system, or ``False`` to force the 2N×2N
+                system.
             params: Parameter updates (same format as :meth:`dc`).
                 Array-valued params are **not** supported.
             **param_updates: Global parameter overrides.
@@ -327,6 +328,8 @@ class Circuit:
         updates = self._coerce_param_updates(params, param_updates)
         arrays = self._require_scalar_params(updates, "sp")
         groups = self._with_param_values(arrays)
+        if holomorphic == "auto":
+            holomorphic = _infer_holomorphic(groups)
         if y_dc is None:
             y_dc = self.solver.solve_dc(
                 groups,
@@ -349,7 +352,7 @@ class Circuit:
         freqs: jax.Array,
         z0: float | jax.Array = 50.0,
         y_dc: jax.Array | None = None,
-        holomorphic: bool = True,
+        holomorphic: bool | str = "auto",
         params: dict[str, Any] | None = None,
         **param_updates: Any,
     ) -> jax.Array:
@@ -526,6 +529,11 @@ def compile_circuit(
         atol=atol,
         max_steps=max_steps,
     )
+
+
+def _infer_holomorphic(groups: dict) -> bool:
+    """Return ``True`` if all component groups are holomorphic."""
+    return all(getattr(group, "holomorphic", True) for group in groups.values())
 
 
 def _infer_is_complex(groups: dict) -> bool:

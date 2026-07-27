@@ -585,7 +585,7 @@ def _ring_modulator_circuit():
     def DCVoltage(signals, s, t, V_dc=-2.0):
         return {"p1": s.i_src, "p2": -s.i_src, "i_src": (signals.p1 - signals.p2) - V_dc}, {}
 
-    @component(ports=("p1", "p2", "v_e"), states=("a", "i_out"))
+    @component(ports=("p1", "p2", "v_e"), states=("a", "i_out"), holomorphic=False)
     def RingEO(signals, s, ng=3.8, L=3.14159265e-5, gamma=0.976, alpha0=0.969,
                alpha1=0.0, f_operating=2.2904e14, f_resonance=2.2901e14, v_to_wr=0.0):
         c_val = 2.998e8
@@ -728,3 +728,17 @@ def test_non_holomorphic_ring_modulator_matches_analytic():
 
     assert err_2n < 0.01, f"holomorphic=False should match analytic, got {err_2n:.2f} dB error"
     assert err_w > 1.0, f"holomorphic=True should NOT match power modulation, got only {err_w:.2f} dB error"
+
+
+def test_holomorphic_auto_detection():
+    """circuit.sp() auto-detects holomorphic=False from component flags."""
+    from circulax.circuit import _infer_holomorphic
+
+    circuit, y_dc, *_ = _ring_modulator_circuit()
+
+    assert not _infer_holomorphic(circuit.groups), "RingEO has holomorphic=False, should infer non-holomorphic"
+
+    freqs = jnp.array([1e9, 10e9, 40e9])
+    S_auto = circuit.sp(ports="out", freqs=freqs, z0=50.0, y_dc=y_dc)
+    S_explicit = circuit.sp(ports="out", freqs=freqs, z0=50.0, y_dc=y_dc, holomorphic=False)
+    assert jnp.allclose(S_auto, S_explicit, atol=1e-12), "auto-detected should match explicit holomorphic=False"
