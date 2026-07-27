@@ -299,7 +299,6 @@ def _compute_transient_fd_gradients(  # noqa: PLR0915
 
     mid = group.model_id
     params_np = np.array(jax.device_get(group.params))  # (N, num_params)
-    n_devices = params_np.shape[0]
 
     v_all_cur = y_cur[group.var_indices].astype(jnp.float64)   # (N, num_nodes)
     v_all_prev = y_prev[group.var_indices].astype(jnp.float64)  # (N, num_nodes)
@@ -340,27 +339,36 @@ def _compute_transient_fd_gradients(  # noqa: PLR0915
             dG_dp = dF_dp + (dQ_cur_dp - dQ_prev_dp) / dt
             grad_accumulator[pi] -= float(jnp.dot(lam, dG_dp))
     else:
+        # Perturb every device's own parameter value at once: OSDI evaluates
+        # each device row independently (embarrassingly parallel per
+        # instance), so a single (N_dev, N_params) perturbed-params array
+        # with row i offset by h_i reproduces, row-for-row, exactly what a
+        # separate one-device-at-a-time call would give. This collapses the
+        # n_params * n_devices eager FFI calls down to n_params (2 calls each).
         for pi, (_pname, pcol) in enumerate(zip(param_names, param_cols, strict=True)):
-            for i in range(n_devices):
-                params_perturbed = params_np.copy()
-                p_val = params_np[i, pcol]
-                h = eps * max(abs(p_val), 1.0)
-                params_perturbed[i, pcol] = p_val + h
-                params_jax_pert = jnp.array(params_perturbed, dtype=jnp.float64)
+            p_vals = params_np[:, pcol]
+            h = eps * np.maximum(np.abs(p_vals), 1.0)  # (N_dev,)
+            params_perturbed = params_np.copy()
+            params_perturbed[:, pcol] = p_vals + h
+            params_jax_pert = jnp.array(params_perturbed, dtype=jnp.float64)
+            h_jax = jnp.asarray(h, dtype=jnp.float64)[:, None]
 
-                cur_pert, chg_pert_cur, _ = osdi_residual_eval(mid, v_all_cur, params_jax_pert, group.states)
-                _, chg_pert_prev, _ = osdi_residual_eval(mid, v_all_prev, params_jax_pert, group.states)
+            cur_pert, chg_pert_cur, _ = osdi_residual_eval(mid, v_all_cur, params_jax_pert, group.states)
+            _, chg_pert_prev, _ = osdi_residual_eval(mid, v_all_prev, params_jax_pert, group.states)
 
-                f_pert = jnp.zeros(sys_size, dtype=jnp.float64).at[group.eq_indices].add(cur_pert)
-                q_pert_cur = jnp.zeros(sys_size, dtype=jnp.float64).at[group.eq_indices].add(chg_pert_cur)
-                q_pert_prev = jnp.zeros(sys_size, dtype=jnp.float64).at[group.eq_indices].add(chg_pert_prev)
+            # Per-device deltas, still in pre-scatter (N_dev, num_nodes) layout.
+            dF_dp_row = (cur_pert - cur_base) / h_jax
+            dQ_cur_dp_row = (chg_pert_cur - chg_base_cur) / h_jax
+            dQ_prev_dp_row = (chg_pert_prev - chg_base_prev) / h_jax
+            dG_dp_row = dF_dp_row + (dQ_cur_dp_row - dQ_prev_dp_row) / dt
 
-                dF_dp = (f_pert - f_base) / h
-                dQ_cur_dp = (q_pert_cur - q_base_cur) / h
-                dQ_prev_dp = (q_pert_prev - q_base_prev) / h
-
-                dG_dp = dF_dp + (dQ_cur_dp - dQ_prev_dp) / dt
-                grad_accumulator[pi, i] -= float(jnp.dot(lam, dG_dp))
+            # Contract with lam per-device via gather instead of scattering
+            # into sys_size first — equivalent to dot(lam, scatter(row)) but
+            # avoids materializing an (N_dev, sys_size) array, and correctly
+            # keeps devices that share an equation index (e.g. a shared node)
+            # from mixing into each other's gradient.
+            grad_contrib = jnp.sum(dG_dp_row * lam[group.eq_indices], axis=1)
+            grad_accumulator[pi, :] -= np.asarray(grad_contrib)
 
 
 # ---------------------------------------------------------------------------
