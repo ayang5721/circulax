@@ -149,6 +149,57 @@ class TestFlattenRecursiveNetlist:
         flat = flatten_recursive_netlist(recnet)
         assert "outer~inner~R1" in flat["instances"]
 
+    def test_6_level_deep_nesting(self) -> None:
+        """Six levels of nesting flatten correctly — beyond SAX circuit() depth."""
+        recnet = {
+            "top": {
+                "instances": {"a": {"component": "L1"}},
+                "connections": {},
+                "ports": {"p1": "a,p1", "p2": "a,p2"},
+            },
+        }
+        for depth in range(1, 7):
+            parent_key = f"L{depth}"
+            child_key = f"L{depth + 1}" if depth < 6 else "Resistor"
+            recnet[parent_key] = {
+                "instances": {"x": {"component": child_key}},
+                "connections": {},
+                "ports": {"p1": "x,p1", "p2": "x,p2"},
+            }
+        flat = flatten_recursive_netlist(recnet)
+        expected = "a~x~x~x~x~x~x"
+        assert expected in flat["instances"]
+        assert flat["instances"][expected]["component"] == "Resistor"
+        assert len(flat["instances"]) == 1
+
+    def test_6_level_deep_nesting_dc_solve(self) -> None:
+        """Six-level nested subcircuit compiles and solves correctly."""
+        models = _leaf_models()
+        recnet = {
+            "top": {
+                "instances": {
+                    "chain": {"component": "L1"},
+                    "V1": {"component": "VDC", "settings": {"V": 1.0}},
+                    "GND": {"component": "ground"},
+                },
+                "connections": {
+                    "V1,p2": "chain,p1",
+                    "GND,p1": ("V1,p1", "chain,p2"),
+                },
+            },
+        }
+        for depth in range(1, 7):
+            child = f"L{depth + 1}" if depth < 6 else "Resistor"
+            recnet[f"L{depth}"] = {
+                "instances": {"x": {"component": child, "settings": {"R": 100.0}} if child == "Resistor" else {"component": child}},
+                "connections": {},
+                "ports": {"p1": "x,p1", "p2": "x,p2"},
+            }
+        circuit = compile_circuit(recnet, models)
+        y = circuit.dc()
+        v = circuit.port(y, "chain~x~x~x~x~x~x,p1")
+        assert jnp.isclose(jnp.abs(v), 1.0, rtol=1e-3)
+
     def test_ground_not_prefixed(self) -> None:
         """GND instances inside subcircuits are not prefixed."""
         recnet = {
