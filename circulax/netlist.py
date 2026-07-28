@@ -209,6 +209,133 @@ def sax_to_kfnetlist(
 
 
 # ---------------------------------------------------------------------------
+# Recursive netlist flattening
+# ---------------------------------------------------------------------------
+
+
+def _is_recursive_netlist(net_dict: dict) -> bool:
+    """Return True if *net_dict* looks like a RecursiveNetlist (dict-of-Netlists)."""
+    if "instances" in net_dict:
+        return False
+    return any(isinstance(v, dict) and "instances" in v for v in net_dict.values())
+
+
+def flatten_recursive_netlist(
+    recnet: dict[str, dict],
+    sep: str = "~",
+) -> dict:
+    """Flatten a ``RecursiveNetlist`` into a single SAX-format netlist.
+
+    A ``RecursiveNetlist`` is a ``dict[str, Netlist]`` where the first key is
+    the top-level circuit and remaining keys define subcircuits.  An instance
+    whose ``component`` string matches a key in the dict is treated as a
+    subcircuit and inlined with prefixed instance names.
+
+    Handles circulax connection extensions (tuple targets, ``nets`` lists)
+    that SAX's own ``flatten_netlist`` does not support.
+
+    Args:
+        recnet: Mapping from circuit name to SAX-format netlist dict.
+        sep: Separator for hierarchical instance names (default ``"~"``).
+
+    Returns:
+        A flat SAX-format netlist dict.
+
+    """
+    import copy
+
+    top_name = next(iter(recnet))
+    flat = copy.deepcopy(recnet[top_name])
+    _flatten_into(recnet, flat, sep)
+    return flat
+
+
+def _rewrite_ref(ref: str, inst_name: str, port_map: dict[str, str]) -> str:
+    """Rewrite a port reference if it targets *inst_name*."""
+    if "," not in ref:
+        return ref
+    inst, port = ref.split(",", 1)
+    if inst == inst_name:
+        mapped = port_map.get(port)
+        if mapped is not None:
+            return mapped
+    return ref
+
+
+def _rewrite_connection_value(
+    val: str | tuple | list,
+    inst_name: str,
+    port_map: dict[str, str],
+) -> str | tuple:
+    """Rewrite the value side of a connection entry."""
+    if isinstance(val, str):
+        return _rewrite_ref(val, inst_name, port_map)
+    return tuple(_rewrite_ref(v, inst_name, port_map) for v in val)
+
+
+def _flatten_into(recnet: dict[str, dict], net: dict, sep: str) -> None:
+    """Inline all subcircuit instances in *net* (mutates in place)."""
+    import copy
+
+    changed = True
+    while changed:
+        changed = False
+        for inst_name in list(net.get("instances", {})):
+            comp = net["instances"][inst_name].get("component", "")
+            if comp not in recnet:
+                continue
+            changed = True
+            child = copy.deepcopy(recnet[comp])
+            _flatten_into(recnet, child, sep)
+            _inline_subcircuit(net, inst_name, child, sep)
+
+
+def _inline_subcircuit(net: dict, inst_name: str, child: dict, sep: str) -> None:
+    """Inline a single flattened subcircuit into *net* (mutates in place)."""
+    del net["instances"][inst_name]
+
+    port_map: dict[str, str] = {ext: _prefix_ref(ref, inst_name, sep) for ext, ref in child.get("ports", {}).items()}
+
+    for child_inst, child_data in child.get("instances", {}).items():
+        if child_inst == "GND" or child_data.get("component") == "ground":
+            net["instances"].setdefault("GND", child_data)
+        else:
+            net["instances"][f"{inst_name}{sep}{child_inst}"] = child_data
+
+    connections = net.setdefault("connections", {})
+    for src, tgt in child.get("connections", {}).items():
+        new_src = _prefix_ref(src, inst_name, sep)
+        if isinstance(tgt, str):
+            new_tgt: str | tuple = _prefix_ref(tgt, inst_name, sep)
+        else:
+            new_tgt = tuple(_prefix_ref(t, inst_name, sep) for t in tgt)
+        connections[new_src] = new_tgt
+
+    for net_entry in child.get("nets", []):
+        p1 = _prefix_ref(net_entry["p1"], inst_name, sep)
+        p2 = _prefix_ref(net_entry["p2"], inst_name, sep)
+        net.setdefault("nets", []).append({"p1": p1, "p2": p2})
+
+    net["connections"] = {
+        _rewrite_ref(src, inst_name, port_map): _rewrite_connection_value(tgt, inst_name, port_map)
+        for src, tgt in connections.items()
+    }
+
+    if "ports" in net:
+        net["ports"] = {pname: _rewrite_ref(ptgt, inst_name, port_map) for pname, ptgt in net["ports"].items()}
+
+
+def _prefix_ref(ref: str, inst_name: str, sep: str) -> str:
+    """Prefix an ``"instance,port"`` reference, skipping GND."""
+    if "," not in ref:
+        return ref
+    inst, port = ref.split(",", 1)
+    if inst == "GND":
+        return ref
+    return f"{inst_name}{sep}{inst},{port}"
+
+
+# ---------------------------------------------------------------------------
 # Legacy SAX build_net_map (kept for backward compat / draw_circuit_graph)
 # ---------------------------------------------------------------------------
 
