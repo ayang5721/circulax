@@ -24,17 +24,11 @@ def _resolve_osdi_param_col(group: Any, param_key: str) -> int:
         model = get_model(group.model_id)
         name_to_col = {n.lower(): i for i, n in enumerate(model.param_names)}
     except (ImportError, Exception) as exc:
-        msg = (
-            f"Cannot resolve OSDI parameter '{param_key}': "
-            f"bosdi registry lookup failed ({exc!r})."
-        )
+        msg = f"Cannot resolve OSDI parameter '{param_key}': bosdi registry lookup failed ({exc!r})."
         raise ValueError(msg) from exc
     col = name_to_col.get(param_key.lower())
     if col is None:
-        msg = (
-            f"Parameter '{param_key}' not found in OSDI model "
-            f"(available: {sorted(name_to_col)})."
-        )
+        msg = f"Parameter '{param_key}' not found in OSDI model (available: {sorted(name_to_col)})."
         raise ValueError(msg)
     return col
 
@@ -82,6 +76,8 @@ class Circuit:
         rtol: float = 1e-6,
         atol: float = 1e-6,
         max_steps: int = 100,
+        _source_netlist: dict | None = None,
+        _source_models: dict | None = None,
     ) -> None:
         self.solver = solver
         self.groups = groups
@@ -90,6 +86,25 @@ class Circuit:
         self.rtol = rtol
         self.atol = atol
         self.max_steps = max_steps
+        self._source_netlist = _source_netlist
+        self._source_models = _source_models
+
+    @property
+    def ports(self) -> tuple[str, ...]:
+        """External port names declared in the source netlist."""
+        if self._source_netlist is None:
+            return ()
+        return tuple(self._source_netlist.get("ports", {}).keys())
+
+    @property
+    def source_netlist(self) -> dict | None:
+        """The original netlist used to compile this circuit, if available."""
+        return self._source_netlist
+
+    @property
+    def source_models(self) -> dict | None:
+        """The leaf models used to compile this circuit, if available."""
+        return self._source_models
 
     def _n(self) -> int:
         return self.sys_size * (2 if self.solver.is_complex else 1)
@@ -453,6 +468,36 @@ class Circuit:
         )
 
 
+def _embed_circuit_subcircuits(
+    net_dict: dict | kfnl.Netlist,
+    models_map: dict,
+    circuit_models: dict[str, Circuit],
+) -> dict:
+    """Build a RecursiveNetlist from Circuit objects in *models_map* (mutates *models_map*)."""
+    from circulax.netlist import _is_recursive_netlist
+
+    if isinstance(net_dict, kfnl.Netlist):
+        net_dict = net_dict.to_dict()
+    recnet: dict[str, dict] = {}
+    if isinstance(net_dict, dict) and _is_recursive_netlist(net_dict):
+        recnet.update(net_dict)
+    else:
+        recnet["top"] = net_dict  # type: ignore[assignment]
+    for name, circ in circuit_models.items():
+        if circ.source_netlist is None:
+            msg = f"Circuit '{name}' has no stored source netlist and cannot be used as a subcircuit."
+            raise ValueError(msg)
+        recnet[name] = circ.source_netlist
+        for mk, mv in (circ.source_models or {}).items():
+            existing = models_map.get(mk)
+            if existing is not None and existing is not mv:
+                msg = f"Model name conflict: '{mk}' maps to different objects in parent and subcircuit '{name}'."
+                raise ValueError(msg)
+            models_map[mk] = mv
+        del models_map[name]
+    return recnet
+
+
 def compile_circuit(
     net_dict: dict | kfnl.Netlist,
     models_map: dict,
@@ -466,11 +511,19 @@ def compile_circuit(
 ) -> Circuit:
     """Compile a netlist into a callable :class:`Circuit`.
 
-    Accepts either a ``kfnetlist.Netlist`` or a SAX-format dict.
+    Accepts a ``kfnetlist.Netlist``, a SAX-format dict, or a
+    ``RecursiveNetlist`` (``dict[str, Netlist]``).  When a recursive netlist
+    is given, subcircuit instances are flattened before compilation.
+
+    A compiled :class:`Circuit` may also appear as a value in *models_map*;
+    its stored source netlist is inlined as a subcircuit automatically.
 
     Args:
-        net_dict: Netlist (kfnetlist.Netlist or SAX-format dict).
-        models_map: Mapping from component type name strings to component classes.
+        net_dict: Netlist (kfnetlist.Netlist, SAX-format dict, or
+            RecursiveNetlist).
+        models_map: Mapping from component type name strings to component
+            classes, SAX model functions, or compiled :class:`Circuit`
+            objects.
         backend: Linear solver backend (``"default"``, ``"dense"``, ``"klu"`` etc.).
         is_complex: If ``True``, treat the circuit as complex-valued (photonic).
             If ``"auto"`` (default), infer this from component outputs.
@@ -484,7 +537,24 @@ def compile_circuit(
 
     """
     from circulax.compiler import compile_netlist
+    from circulax.netlist import _is_recursive_netlist, flatten_recursive_netlist
     from circulax.solvers.linear import analyze_circuit
+
+    models_map = dict(models_map)
+    source_netlist: dict | None = None
+    source_models: dict | None = None
+
+    circuit_models = {k: v for k, v in models_map.items() if isinstance(v, Circuit)}
+    if circuit_models:
+        net_dict = _embed_circuit_subcircuits(net_dict, models_map, circuit_models)
+
+    if isinstance(net_dict, dict) and _is_recursive_netlist(net_dict):
+        source_netlist = net_dict.get(next(iter(net_dict)))
+        source_models = {k: v for k, v in models_map.items() if not isinstance(v, Circuit)}
+        net_dict = flatten_recursive_netlist(net_dict)
+    elif isinstance(net_dict, dict):
+        source_netlist = net_dict
+        source_models = {k: v for k, v in models_map.items() if not isinstance(v, Circuit)}
 
     groups, sys_size, port_map = compile_netlist(net_dict, models_map)
     if is_complex == "auto":
@@ -501,6 +571,8 @@ def compile_circuit(
         rtol=rtol,
         atol=atol,
         max_steps=max_steps,
+        _source_netlist=source_netlist,
+        _source_models=source_models,
     )
 
 
