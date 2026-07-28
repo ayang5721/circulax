@@ -8,7 +8,7 @@
 | SPICE Equivalent | `.subckt` / `.ends` |
 | Data Model | SAX `RecursiveNetlist` (`dict[str, Netlist]`) |
 | Compilation Strategy | Netlist-level flattening (pre-compilation) |
-| Status | V1 specified, not yet implemented |
+| Status | V1 implemented ([PR #39](https://github.com/gdsfactory/circulax/pull/39)) |
 
 ## Problem Statement
 
@@ -148,42 +148,39 @@ flattening:
 
 | File | Change |
 |------|--------|
-| `circulax/netlist.py` | Add `flatten_recursive_netlist()` |
-| `circulax/circuit.py` | Extend `compile_circuit` to detect RecursiveNetlist and Circuit-in-models_map; store source data on `Circuit`; add `ports` property |
-| `circulax/__init__.py` | Export `flatten_recursive_netlist` |
-| `tests/test_subcircuit.py` | New test file |
+| `circulax/netlist.py` | Added `flatten_recursive_netlist()`, `_is_recursive_netlist()`, `_flatten_into()`, `_inline_subcircuit()`, `_rewrite_ref()`, `_rewrite_connection_value()`, `_prefix_ref()` |
+| `circulax/circuit.py` | Extended `compile_circuit` to detect RecursiveNetlist and Circuit-in-models_map; added `_embed_circuit_subcircuits()` helper; stored source data on `Circuit`; added `ports`, `source_netlist`, `source_models` properties |
+| `circulax/__init__.py` | Exported `flatten_recursive_netlist` |
+| `tests/test_subcircuit.py` | New test file (22 tests across 4 classes) |
 
-#### `flatten_recursive_netlist` signature
+#### Key functions
 
-```python
-def flatten_recursive_netlist(
-    recnet: dict[str, dict],
-    sep: str = "~",
-) -> dict:
-    """Flatten a RecursiveNetlist into a single SAX-format netlist.
+**`flatten_recursive_netlist(recnet, sep="~")`** — Public entry point. Deep-copies the
+top-level netlist and delegates to `_flatten_into`.
 
-    Extends SAX's flatten_netlist to handle circulax connection
-    extensions (tuple targets, nets lists).
-    """
-```
+**`_flatten_into(recnet, net, sep)`** — Iterates over instances, identifies subcircuit
+references (component matches a key in `recnet`), recursively flattens children, then
+calls `_inline_subcircuit` to merge each child into the parent.
 
-#### `Circuit.__init__` additions
+**`_inline_subcircuit(net, inst_name, child, sep)`** — Merges a flattened child netlist
+into the parent: prefixes child instances, builds port mapping, rewrites parent
+connections through the mapping, inlines child connections, removes the subcircuit
+instance.
 
-```python
-self._source_netlist = _source_netlist   # original netlist (for reuse as subcircuit)
-self._source_models = _source_models     # leaf models used (for reuse as subcircuit)
-```
+**`_embed_circuit_subcircuits(net_dict, models_map, circuit_models)`** — Extracts
+`Circuit` objects from `models_map`, builds a `RecursiveNetlist` from their stored source
+netlists, and merges their leaf models into `models_map`.
 
-#### `Circuit.ports` property
+#### `Circuit` additions
 
 ```python
-@property
-def ports(self) -> tuple[str, ...]:
-    """External port names from the source netlist."""
-    return tuple((self._source_netlist or {}).get("ports", {}).keys())
+# Properties (public API)
+circuit.ports           # → tuple[str, ...] from source netlist
+circuit.source_netlist  # → dict | None (stored for reuse as subcircuit)
+circuit.source_models   # → dict | None (leaf models for reuse)
 ```
 
-#### RecursiveNetlist detection
+#### RecursiveNetlist detection (`_is_recursive_netlist`)
 
 A `dict` is a `RecursiveNetlist` if:
 - It does NOT have an `"instances"` key (which would make it a flat Netlist).
@@ -191,23 +188,58 @@ A `dict` is a `RecursiveNetlist` if:
 
 ### Test Matrix
 
+All tests in `tests/test_subcircuit.py` (22 tests, 4 classes):
+
+#### `TestIsRecursiveNetlist` — Detection logic
+
+| Test | Scenario |
+|------|----------|
+| `test_flat_netlist` | Dict with `instances` key → not recursive |
+| `test_recursive_netlist` | Dict of named netlists → recursive |
+| `test_empty_dict` | Empty dict → not recursive |
+
+#### `TestFlattenRecursiveNetlist` — Flattening algorithm
+
 | Test | Scenario | Verification |
 |------|----------|-------------|
-| `test_parallel_resistors_recnet` | Two R in parallel via RecursiveNetlist | DC solve: I = V / R_parallel |
-| `test_multiple_subcircuit_instances` | Two instances of same subcircuit | Correct prefixing: `RP1~R1`, `RP2~R1` |
-| `test_nested_subcircuits` | 3-level nesting | Instance name: `outer~inner~R1` |
-| `test_circuit_in_models_map` | Compiled Circuit passed in models_map | DC solve matches standalone |
-| `test_stateful_subcircuit` | Subcircuit with Inductor (state `i_L`) | Transient analysis works |
-| `test_ground_sharing` | Subcircuit with internal GND | GND not prefixed, shared with parent |
-| `test_tuple_target_connections` | Circulax tuple extension in subcircuit | Correct flattening |
-| `test_subcircuit_ports_property` | `circuit.ports` on compiled circuit | Returns declared port names |
+| `test_no_subcircuits` | Flat netlist passed to flattener | Returned unchanged |
+| `test_basic_flattening` | Single subcircuit level | Child instances prefixed with `~` |
+| `test_connection_rewriting` | Parent connections reference subcircuit ports | Rewritten to internal refs |
+| `test_tuple_targets` | Circulax tuple-target connections | Tuples rewritten correctly |
+| `test_nested_subcircuits` | 3-level nesting | Instance: `outer~inner~R1` |
+| `test_6_level_deep_nesting` | 6-level deep hierarchy | Instance: `a~x~x~x~x~x~x` with component `Resistor` |
+| `test_6_level_deep_nesting_dc_solve` | 6-level deep with DC solve | Correct voltage at deepest node |
+| `test_ground_not_prefixed` | Subcircuit with internal GND | `GND` not prefixed, global |
+| `test_multiple_instances_of_same_subcircuit` | Two instances of same subcircuit | `RP1~R1`, `RP2~R1` both present |
+| `test_parent_ports_rewritten` | Parent ports reference subcircuit | Ports rewritten through mapping |
+| `test_nets_list_rewriting` | `nets` list format connections | Refs prefixed in net dicts |
+
+#### `TestCompileCircuitRecursive` — End-to-end compilation
+
+| Test | Scenario | Verification |
+|------|----------|-------------|
+| `test_parallel_resistors_dc` | Two R in parallel via RecursiveNetlist | DC solve: I = V / R_parallel |
+| `test_subcircuit_with_state_transient` | Subcircuit with Inductor (stateful) | Transient analysis works |
+| `test_ports_property` | `circuit.ports` on compiled circuit | Returns declared port names |
+| `test_ports_property_empty` | Circuit without ports | Returns empty tuple |
+
+#### `TestCircuitInModelsMap` — Circuit-as-subcircuit composition
+
+| Test | Scenario | Verification |
+|------|----------|-------------|
+| `test_circuit_as_subcircuit` | Compiled Circuit in parent's models_map | DC solve matches expected |
+| `test_circuit_without_source_raises` | Circuit with no stored source netlist | Raises `ValueError` |
+| `test_model_name_collision_same_object` | Same leaf model under same key | No error (deduped) |
+| `test_model_name_collision_different_object_raises` | Different models under same key | Raises `ValueError` |
 
 ### Verification
 
+All 22 subcircuit tests pass. Full test suite (243 existing + 22 new) passes with no
+regressions. Linting clean under ruff.
+
 ```bash
-cd /path/to/circulax
-pytest tests/test_subcircuit.py -v        # new tests
-pytest tests/ -v                          # no regressions
+pytest tests/test_subcircuit.py -v        # 22 passed
+pytest tests/ -v                          # 265 passed
 ruff check circulax/ tests/
 ruff format circulax/ tests/
 ```
@@ -297,5 +329,6 @@ primarily valuable for linear subcircuits (S-parameter domain), which SAX alread
 
 ### Circuit.to_netlist() method
 
-**Trivial once V1 lands**: Return `self._source_netlist`. Useful for serialization,
-inspection, and programmatic composition.
+**Trivial now that V1 has landed**: Return `self.source_netlist`. The public
+`source_netlist` property already exists — `to_netlist()` would be a named alias.
+Useful for serialization, inspection, and programmatic composition.
