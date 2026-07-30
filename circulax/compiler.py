@@ -174,7 +174,12 @@ def solve_connectivity(connections: dict) -> dict:  # noqa: C901
     return node_map, node_counter
 
 
-def compile_netlist(netlist: dict | kfnl.Netlist, models_map: dict) -> tuple[dict, int, dict]:  # noqa: C901, PLR0912, PLR0915
+def compile_netlist(  # noqa: C901, PLR0912, PLR0915
+    netlist: dict | kfnl.Netlist,
+    models_map: dict,
+    *,
+    params_map: dict[str, dict[str, str]] | None = None,
+) -> tuple[dict, int, dict]:
     """Compile a netlist into batched, vectorized component groups ready for simulation.
 
     Accepts either a ``kfnetlist.Netlist`` (preferred) or a SAX-format dict
@@ -240,6 +245,11 @@ def compile_netlist(netlist: dict | kfnl.Netlist, models_map: dict) -> tuple[dic
 
         comp_cls = models_map[comp_type]
         settings = settings_override.get(name, inst.settings or {})
+
+        # Apply parameter name mapping (cell settings → model fields).
+        if params_map and comp_type in params_map:
+            rename = params_map[comp_type]
+            settings = {rename.get(k, k): v for k, v in settings.items()}
 
         # OSDI components use a descriptor object instead of an Equinox class.
         if OsdiModelDescriptor is not None and isinstance(comp_cls, OsdiModelDescriptor):
