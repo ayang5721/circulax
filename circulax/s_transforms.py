@@ -249,7 +249,7 @@ def sax_component(fn: callable, *, name: str | None = None) -> callable:
         ]
     )
 
-    cls = component(ports=port_names, states=aux_state_names)(physics_wrapper)
+    cls = component(ports=port_names, states=aux_state_names, holomorphic=True)(physics_wrapper)
     cls._raw_to_sanitized_ports = raw_to_sanitized
     cls._sanitized_to_raw_ports = {sanitized: tuple(raws) for sanitized, raws in sanitized_to_raw.items()}
     return cls

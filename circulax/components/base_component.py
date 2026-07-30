@@ -93,6 +93,7 @@ class CircuitComponent(eqx.Module):
 
     _uses_time: ClassVar[bool] = False
     _is_fdomain: ClassVar[bool] = False
+    _holomorphic: ClassVar[bool] = False
 
     _VarsType_P: ClassVar[Any] = None
     _VarsType_S: ClassVar[Any] = None
@@ -243,6 +244,33 @@ def _extract_param(container: Any, name: str) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Holomorphic validation via jaxpr inspection
+# ---------------------------------------------------------------------------
+_NON_HOLOMORPHIC_PRIMITIVES = frozenset({"real", "imag", "conj", "abs"})
+
+
+def _jaxpr_has_non_holomorphic(jaxpr: Any) -> set[str]:
+    """Walk a jaxpr and return names of non-holomorphic primitives on traced variables."""
+    from jax._src.core import ClosedJaxpr, Jaxpr, Literal
+
+    found: set[str] = set()
+    for eqn in jaxpr.eqns:
+        if eqn.primitive.name in _NON_HOLOMORPHIC_PRIMITIVES:
+            has_traced_complex_input = any(
+                not isinstance(v, Literal) and hasattr(v.aval, "dtype") and jnp.issubdtype(v.aval.dtype, jnp.complexfloating)
+                for v in eqn.invars
+            )
+            if has_traced_complex_input:
+                found.add(eqn.primitive.name)
+        for v in eqn.params.values():
+            if isinstance(v, Jaxpr):
+                found |= _jaxpr_has_non_holomorphic(v)
+            elif isinstance(v, ClosedJaxpr):
+                found |= _jaxpr_has_non_holomorphic(v.jaxpr)
+    return found
+
+
+# ---------------------------------------------------------------------------
 # The Builder
 # ---------------------------------------------------------------------------
 def _build_component(  # noqa: C901
@@ -255,6 +283,7 @@ def _build_component(  # noqa: C901
     setup_fn: Any = None,
     differentiable_params: "tuple[str, ...] | None" = None,
     port_aliases: "dict[str, str | tuple[str, ...]] | None" = None,
+    holomorphic: bool = False,
 ) -> type[CircuitComponent]:
     """Compile a physics function into a :class:`CircuitComponent` subclass.
 
@@ -535,6 +564,7 @@ def _build_component(  # noqa: C901
         "_fast_physics": staticmethod(_fast_physics),
         "_invoke_physics": _invoke_physics,
         "_uses_time": uses_time,
+        "_holomorphic": holomorphic,
         "amplitude_param": amplitude_param,
         "_has_init_arg": has_init_arg,
         "_setup_fn_ref": None,
@@ -565,6 +595,7 @@ def component(
     states: tuple[str, ...] = (),
     amplitude_param: str = "",
     port_aliases: "dict[str, str | tuple[str, ...]] | None" = None,
+    holomorphic: bool = False,
 ) -> Any:
     """Decorator for defining a time-independent circuit component.
 
@@ -588,6 +619,13 @@ def component(
             ``{"p1": "P", "p2": "N"}``. Lets integrators (e.g. Mosaic/kfnetlist)
             reuse this component's physics under their own port-naming
             convention without redefining it.
+        holomorphic: If ``True``, the component's physics function is
+            holomorphic (complex-differentiable), enabling the faster N×N
+            Wirtinger AC solve.  Defaults to ``False`` (safe: the full 2N×2N
+            real-block system is always correct).  Set to ``True`` for
+            components whose physics uses only holomorphic operations — if
+            *every* component in a circuit is holomorphic, the AC sweep
+            uses the faster N×N path automatically.
 
     Returns:
         A decorator that accepts a physics function and returns a
@@ -602,7 +640,7 @@ def component(
 
     """
     return lambda fn: _build_component(
-        fn, ports, states, uses_time=False, amplitude_param=amplitude_param, port_aliases=port_aliases
+        fn, ports, states, uses_time=False, amplitude_param=amplitude_param, port_aliases=port_aliases, holomorphic=holomorphic
     )
 
 
@@ -611,6 +649,7 @@ def source(
     states: tuple[str, ...] = (),
     amplitude_param: str = "",
     port_aliases: "dict[str, str | tuple[str, ...]] | None" = None,
+    holomorphic: bool = False,
 ) -> Any:
     """Decorator for defining a time-dependent circuit component.
 
@@ -630,6 +669,8 @@ def source(
         port_aliases: Optional mapping from a canonical port name to one or
             more alternate names a netlist may use instead. See
             :func:`component`.
+        holomorphic: If ``True``, the component's physics is holomorphic.
+            Defaults to ``False`` (safe).  See :func:`component`.
 
     Returns:
         A decorator that accepts a physics function and returns a
@@ -644,5 +685,5 @@ def source(
 
     """
     return lambda fn: _build_component(
-        fn, ports, states, uses_time=True, amplitude_param=amplitude_param, port_aliases=port_aliases
+        fn, ports, states, uses_time=True, amplitude_param=amplitude_param, port_aliases=port_aliases, holomorphic=holomorphic
     )

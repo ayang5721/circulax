@@ -70,6 +70,7 @@ class ComponentGroup(eqx.Module):
     is_fdomain: bool = eqx.field(static=True, default=False)
     amplitude_param: str = eqx.field(static=True, default="")
     combined_func: Any = eqx.field(static=True, default=None)
+    holomorphic: bool = eqx.field(static=True, default=False)
 
 
 def get_model_width(func: callable) -> int:
@@ -354,6 +355,7 @@ def compile_netlist(netlist: dict | kfnl.Netlist, models_map: dict) -> tuple[dic
             is_fdomain=getattr(comp_cls, "_is_fdomain", False),
             amplitude_param=getattr(comp_cls, "amplitude_param", ""),
             combined_func=_combined_func,
+            holomorphic=getattr(comp_cls, "_holomorphic", True),
         )
 
     # --- Process OSDI buckets (requires circulax[verilog-a] / bosdi) ---

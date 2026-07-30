@@ -14,14 +14,14 @@ from circulax.components.base_component import (
 _PN_ALIASES = {"p1": "P", "p2": "N"}
 
 
-@component(ports=("p1", "p2"), port_aliases=_PN_ALIASES)
+@component(ports=("p1", "p2"), port_aliases=_PN_ALIASES, holomorphic=True)
 def Resistor(signals: Signals, s: States, R: float = 1e3) -> PhysicsReturn:
     """Ohm's Law: I = V/R."""
     i = (signals.p1 - signals.p2) / (R + 1e-12)
     return {"p1": i, "p2": -i}, {}
 
 
-@component(ports=("p1", "p2"), port_aliases=_PN_ALIASES)
+@component(ports=("p1", "p2"), port_aliases=_PN_ALIASES, holomorphic=True)
 def Capacitor(signals: Signals, s: States, C: float = 1e-12) -> PhysicsReturn:
     """Q = C * V.
     Returns Charge (q) so the solver computes I = dq/dt.
@@ -31,7 +31,7 @@ def Capacitor(signals: Signals, s: States, C: float = 1e-12) -> PhysicsReturn:
     return {}, {"p1": q_val, "p2": -q_val}
 
 
-@component(ports=("p1", "p2"), states=("i_L",), port_aliases=_PN_ALIASES)
+@component(ports=("p1", "p2"), states=("i_L",), port_aliases=_PN_ALIASES, holomorphic=True)
 def Inductor(signals: Signals, s: States, L: float = 1e-9) -> PhysicsReturn:
     """V = L * di/dt formulated via flux: f['i_L'] = V, q['i_L'] = -L*i_L."""
     v_drop = signals.p1 - signals.p2
@@ -43,7 +43,7 @@ def Inductor(signals: Signals, s: States, L: float = 1e-9) -> PhysicsReturn:
 # ===========================================================================
 
 
-@source(ports=("p1", "p2"), states=("i_src",), amplitude_param="V")
+@source(ports=("p1", "p2"), states=("i_src",), amplitude_param="V", holomorphic=True)
 def VoltageSource(signals: Signals, s: States, t: float, V: float = 0.0, delay: float = 0.0) -> PhysicsReturn:
     """Step voltage source."""
     v_val = jnp.where(t >= delay, V, 0.0)
@@ -51,7 +51,7 @@ def VoltageSource(signals: Signals, s: States, t: float, V: float = 0.0, delay: 
     return {"p1": s.i_src, "p2": -s.i_src, "i_src": constraint}, {}
 
 
-@source(ports=("p1", "p2"), states=("i_src",), amplitude_param="V")
+@source(ports=("p1", "p2"), states=("i_src",), amplitude_param="V", holomorphic=True)
 def SmoothPulse(
     signals: Signals,
     s: States,
@@ -67,7 +67,7 @@ def SmoothPulse(
     return {"p1": s.i_src, "p2": -s.i_src, "i_src": constraint}, {}
 
 
-@source(ports=("p1", "p2"), states=("i_src",), amplitude_param="V")
+@source(ports=("p1", "p2"), states=("i_src",), amplitude_param="V", holomorphic=True)
 def VoltageSourceAC(
     signals: Signals,
     s: States,
@@ -85,7 +85,7 @@ def VoltageSourceAC(
     return {"p1": s.i_src, "p2": -s.i_src, "i_src": constraint}, {}
 
 
-@source(ports=("p1", "p2"), states=("i_src",), amplitude_param="v2")
+@source(ports=("p1", "p2"), states=("i_src",), amplitude_param="v2", holomorphic=True)
 def PulseVoltageSource(
     signals: Signals,
     s: States,
@@ -125,7 +125,7 @@ def PulseVoltageSource(
     return {"p1": s.i_src, "p2": -s.i_src, "i_src": constraint}, {}
 
 
-@component(ports=("p1", "p2"), amplitude_param="I")
+@component(ports=("p1", "p2"), amplitude_param="I", holomorphic=True)
 def CurrentSource(signals: Signals, s: States, I: float = 0.0) -> PhysicsReturn:
     """Constant current source."""
     return {"p1": I, "p2": -I}, {}
@@ -527,7 +527,7 @@ def BJT_NPN_Dynamic(
 # ===========================================================================
 
 
-@component(ports=("out_p", "out_m", "ctrl_p", "ctrl_m"), states=("i_src",))
+@component(ports=("out_p", "out_m", "ctrl_p", "ctrl_m"), states=("i_src",), holomorphic=True)
 def VCVS(signals: Signals, s: States, A: float = 1.0) -> PhysicsReturn:
     """Voltage Controlled Voltage Source."""
     constraint = (signals.out_p - signals.out_m) - A * (signals.ctrl_p - signals.ctrl_m)
@@ -540,14 +540,14 @@ def VCVS(signals: Signals, s: States, A: float = 1.0) -> PhysicsReturn:
     }, {}
 
 
-@component(ports=("out_p", "out_m", "ctrl_p", "ctrl_m"))
+@component(ports=("out_p", "out_m", "ctrl_p", "ctrl_m"), holomorphic=True)
 def VCCS(signals: Signals, s: States, G: float = 0.0) -> PhysicsReturn:
     """Voltage Controlled Current Source."""
     i = G * (signals.ctrl_p - signals.ctrl_m)
     return {"out_p": i, "out_m": -i, "ctrl_p": 0.0, "ctrl_m": 0.0}, {}
 
 
-@component(ports=("out_p", "out_m", "in_p", "in_m"), states=("i_src",))
+@component(ports=("out_p", "out_m", "in_p", "in_m"), states=("i_src",), holomorphic=True)
 def IdealOpAmp(signals: Signals, s: States, A: float = 1e6) -> PhysicsReturn:
     """Ideal Op Amp."""
     constraint = (signals.out_p - signals.out_m) - A * (signals.in_p - signals.in_m)
@@ -560,7 +560,7 @@ def IdealOpAmp(signals: Signals, s: States, A: float = 1e6) -> PhysicsReturn:
     }, {}
 
 
-@component(ports=("p1", "p2", "cp", "cm"))
+@component(ports=("p1", "p2", "cp", "cm"), holomorphic=True)
 def VoltageControlledSwitch(signals: Signals, s: States, Ron: float = 1.0, Roff: float = 1e6, Vt: float = 0.0) -> PhysicsReturn:
     """Voltage Controlled Switch."""
     v_ctrl = signals.cp - signals.cm
@@ -575,7 +575,7 @@ def VoltageControlledSwitch(signals: Signals, s: States, Ron: float = 1.0, Roff:
     return {"p1": i, "p2": -i, "cp": 0.0, "cm": 0.0}, {}
 
 
-@component(ports=("out_p", "out_m", "in_p", "in_m"), states=("i_src", "i_ctrl"))
+@component(ports=("out_p", "out_m", "in_p", "in_m"), states=("i_src", "i_ctrl"), holomorphic=True)
 def CCVS(signals: Signals, s: States, R: float = 1.0) -> PhysicsReturn:
     """Current Controlled Voltage Source: V_out = R * i_ctrl, V_in = 0 (short)."""
     eq_in = signals.in_p - signals.in_m
@@ -590,7 +590,7 @@ def CCVS(signals: Signals, s: States, R: float = 1.0) -> PhysicsReturn:
     }, {}
 
 
-@component(ports=("out_p", "out_m", "in_p", "in_m"), states=("i_ctrl",))
+@component(ports=("out_p", "out_m", "in_p", "in_m"), states=("i_ctrl",), holomorphic=True)
 def CCCS(signals: Signals, s: States, alpha: float = 1.0) -> PhysicsReturn:
     """Current Controlled Current Source: I_out = alpha * i_ctrl, V_in = 0 (short)."""
     eq_in = signals.in_p - signals.in_m
