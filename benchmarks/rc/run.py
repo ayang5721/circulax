@@ -4,8 +4,8 @@ Invocations:
     pixi run python benchmarks/rc/run.py
 
 Reads the upstream VACASK benchmark templates directly from
-/home/cdaunt/code/vacask/VACASK/benchmark/rc/{vacask,ngspice}/ and
-times them alongside the local circulax.py runner.
+$VACASK_REPO/benchmark/rc/{vacask,ngspice}/ and times them alongside
+the local circulax.py runner.
 """
 
 from __future__ import annotations
@@ -24,16 +24,20 @@ REPO = HERE.parents[1]
 # package and `import bench_circulax` hits the local file.
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(HERE.parent))
+from _paths import vacask_bin as _vacask_bin  # noqa: E402
+from _paths import vacask_repo as _vacask_repo
 
-UPSTREAM = Path("/home/cdaunt/code/vacask/VACASK/benchmark/rc")
+UPSTREAM = _vacask_repo() / "benchmark" / "rc"
 CSV_PATH = HERE / "results.csv"
 README = HERE / "README.md"
 
 
 def run_vacask() -> dict:
     """Invoke upstream VACASK template.  Returns dict or {'status': ...}."""
-    vacask = shutil.which("vacask") or "/home/cdaunt/opt/vacask/bin/vacask"
-    if not Path(vacask).exists():
+    try:
+        vacask = _vacask_bin()
+    except OSError:
         return {"simulator": "vacask", "status": "not_installed"}
     sim_dir = UPSTREAM / "vacask"
     if not (sim_dir / "runme.sim").exists():
