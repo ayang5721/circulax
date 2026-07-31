@@ -182,13 +182,13 @@ circulax = { path = ".", editable = true, extras = ["verilog-a"] }
 [tool.pixi.tasks]
 copy_readme      = { cmd = ["python", "scripts/copy_readme.py"],   description = "Copy README into docs/ and strip docs/ prefixes" }
 install_ipkernel = "python -m ipykernel install --user --name circulax"
-nbrun            = { cmd = ["python", "scripts/run_notebooks.py"], depends-on = ["install_ipkernel"], description = "Execute all notebooks in-place with papermill" }
+nbrun            = { cmd = ["python", "scripts/run_notebooks.py"], depends-on = ["install_ipkernel", "compile_osdi"], description = "Execute all notebooks in-place with papermill" }
 nbdocs           = { cmd = ["python", "scripts/build_docs.py"],    depends-on = ["copy_readme"], description = "Convert executed notebooks to Markdown in docs/examples/" }
 docs-serve       = { cmd = ["mkdocs", "serve", "-w", "docs"], depends-on = ["copy_readme"] }
 docs-deploy      = { cmd = ["mkdocs", "gh-deploy", "--force"], depends-on = ["copy_readme"] }
-compile_osdi     = { cmd = ["python", "scripts/compile_osdi.py"], description = "Compile VA test fixtures to OSDI using openvaf-r (--target-cpu generic)" }
+compile_osdi     = { cmd = ["python", "scripts/compile_osdi.py"], description = "Compile VA test fixtures to OSDI using openvaf-r (--target-cpu generic). Manual/LGPL-gated: never a dependency of build/build-conda." }
 pytest_run       = { cmd = ["pytest", "tests", "-m", "not long"], description = "Fast tests only — skips @pytest.mark.long (notebook execution)" }
-pytest_all       = { cmd = ["pytest", "tests", "-m", "long or not long"], depends-on = ["install_ipkernel"], description = "All tests including @pytest.mark.long (notebook execution)" }
+pytest_all       = { cmd = ["pytest", "tests", "-m", "long or not long"], depends-on = ["install_ipkernel", "compile_osdi"], description = "All tests including @pytest.mark.long (notebook execution)" }
 lint_format      = "ruff format"
 lint_check       = "ruff -v check"
 build            = { cmd = "uv build", description = "Build sdist and wheel into dist/" }

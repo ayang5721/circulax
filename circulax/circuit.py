@@ -535,6 +535,7 @@ def compile_circuit(
     rtol: float = 1e-6,
     atol: float = 1e-6,
     max_steps: int = 100,
+    params_map: dict[str, dict[str, str]] | None = None,
 ) -> Circuit:
     """Compile a netlist into a callable :class:`Circuit`.
 
@@ -558,6 +559,9 @@ def compile_circuit(
         rtol: Relative tolerance for the Newton solver.
         atol: Absolute tolerance for the Newton solver.
         max_steps: Max Newton iterations.
+        params_map: Optional mapping from component type names to dicts that
+            rename netlist setting keys to model field names, e.g.
+            ``{"thermal_heater": {"length": "length_um"}}``.
 
     Returns:
         A :class:`Circuit` ready to call with ``circuit(**params)``.
@@ -583,7 +587,7 @@ def compile_circuit(
         source_netlist = net_dict
         source_models = {k: v for k, v in models_map.items() if not isinstance(v, Circuit)}
 
-    groups, sys_size, port_map = compile_netlist(net_dict, models_map)
+    groups, sys_size, port_map = compile_netlist(net_dict, models_map, params_map=params_map)
     if is_complex == "auto":
         is_complex = _infer_is_complex(groups)
     elif not isinstance(is_complex, bool):

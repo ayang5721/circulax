@@ -38,13 +38,13 @@ params = optax.apply_updates(params, updates)
 Use the same pattern for frequency-domain and periodic analyses:
 
 ```python
-S = circuit.ac(params={"L1.L": L, "C1.C": C}, ports=["in", "out"], freqs=freqs)
+S = circuit.sp(params={"L1.L": L, "C1.C": C}, ports=["in", "out"], freqs=freqs)
 y_time, y_freq = circuit.hb(params={"Vdp.mu": mu}, freq=f0, harmonics=7, y0=y_dc)
 ```
 
 Advanced users can still update compiled `groups` directly with
 `update_params_dict(...)` when building custom transforms or solver-control
-loops, but `circuit.dc/ac/hb(params={...})` is the normal differentiable
+loops, but `circuit.dc/sp/hb(params={...})` is the normal differentiable
 workflow.
 
 ## Examples
