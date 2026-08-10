@@ -21,6 +21,8 @@ algebra kernels.
 """
 
 import functools
+from collections.abc import Callable
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -31,6 +33,32 @@ try:
     from bosdi.circulax import OsdiComponentGroup
 except ImportError:
     OsdiComponentGroup = None
+
+
+def _map_devices(body: Callable, xs: Any, *, strategy: str = "vmap", chunk_size: int = 1) -> Any:
+    """Map ``body`` over the leading (device) axis of pytree ``xs``.
+
+    - ``"vmap"``: ``jax.vmap`` -> batched predicate -> both-branch ``select``
+      (fastest for cheap/branch-free kernels; pathological for BSIM-class
+      kernels with hundreds of voltage-dependent ``lax.cond``s).
+    - ``"scan"``: ``jax.lax.map`` -> body compiled once, devices sequential,
+      SCALAR predicate -> real ``lax.cond`` (taken branch only). Differentiable
+      forward AND reverse.
+    - ``"chunked"``: ``lax.map`` over chunks of ``chunk_size``, ``vmap`` within
+      each chunk (via ``lax.map``'s built-in ``batch_size``).
+
+    All three return the same pytree of stacked per-device results (up to float
+    reassociation), so call sites are agnostic to the choice.
+    """
+    if strategy == "vmap":
+        return jax.vmap(body)(xs)
+    if strategy == "scan":
+        return jax.lax.map(body, xs)
+    if strategy == "chunked":
+        # jax.lax.map's batch_size does vmap-within-chunk / scan-across and
+        # handles the ragged tail (requires JAX >= 0.4.31).
+        return jax.lax.map(body, xs, batch_size=max(1, chunk_size))
+    raise ValueError(f"unknown device-map strategy {strategy!r}")
 
 
 def _assemble_osdi_group(
@@ -53,6 +81,7 @@ def _assemble_osdi_group(
 
     try:
         from osdi_jax import osdi_eval_with_handle, osdi_residual_eval_with_handle
+
         _HAS_TIER3 = True
     except ImportError:
         _HAS_TIER3 = False
@@ -65,7 +94,8 @@ def _assemble_osdi_group(
         else:
             cur, chg, _ = osdi_residual_eval(group.model_id, v_all, group.params, group.states)
         j_eff_stub = jnp.zeros(
-            (v_all.shape[0], group.num_nodes, group.num_nodes), dtype=cur.dtype,
+            (v_all.shape[0], group.num_nodes, group.num_nodes),
+            dtype=cur.dtype,
         )
         return cur, chg, j_eff_stub
 
@@ -79,8 +109,14 @@ def _assemble_osdi_group(
 
     if group.use_schur_reduction:
         return _schur_reduce_osdi_stamp(
-            v_all=v_all, cur=cur, chg=chg, G=G, C=C,
-            alpha=alpha, dt=dt, group=group,
+            v_all=v_all,
+            cur=cur,
+            chg=chg,
+            G=G,
+            C=C,
+            alpha=alpha,
+            dt=dt,
+            group=group,
         )
 
     j_eff = G + (alpha / dt) * C + group.reg_diag
@@ -120,9 +156,7 @@ def _schur_reduce_osdi_stamp(
     eye_I = jnp.eye(I, dtype=G.dtype)
 
     G_II_reg = G_II + gmin * eye_I
-    rhs_dc = jnp.concatenate(
-        [G_IT, cur_I[..., None], chg_I[..., None]], axis=-1
-    )
+    rhs_dc = jnp.concatenate([G_IT, cur_I[..., None], chg_I[..., None]], axis=-1)
     sol_dc = jnp.linalg.solve(G_II_reg, rhs_dc)
     X_dc = sol_dc[..., :T]
     cur_back = sol_dc[..., T]
@@ -167,12 +201,11 @@ def _assemble_osdi_gc_separate(
     try:
         from osdi_jax import osdi_eval
     except ImportError as _bosdi_err:
-        raise ImportError(
-            "OSDI support requires the 'bosdi' package."
-        ) from _bosdi_err
+        raise ImportError("OSDI support requires the 'bosdi' package.") from _bosdi_err
 
     try:
         from osdi_jax import osdi_eval_with_handle
+
         _HAS_TIER3 = True
     except ImportError:
         _HAS_TIER3 = False
@@ -339,9 +372,13 @@ def assemble_system_real(
         # which fires the custom JVP n times.  Only active when the VA emitter
         # produced a combined_fn (i.e. group.combined_func is not None).
         if group.combined_func is not None:
-            f_l, q_l, df_l, dq_l = jax.vmap(
-                lambda v, p: group.combined_func(v, p, t1)
-            )(v_locs, params)
+            _body = lambda vp: group.combined_func(vp[0], vp[1], t1)
+            f_l, q_l, df_l, dq_l = _map_devices(
+                _body,
+                (v_locs, params),
+                strategy=group.assembly_strategy,
+                chunk_size=group.assembly_chunk_size,
+            )
             total_f = total_f.at[group.eq_indices].add(f_l)
             total_q = total_q.at[group.eq_indices].add(q_l)
             j_eff = df_l + (alpha / dt) * dq_l
@@ -350,7 +387,13 @@ def assemble_system_real(
 
         physics_at_t1 = functools.partial(_real_physics, group=group, t1=t1)
 
-        (f_l, q_l), (df_l, dq_l) = jax.vmap(functools.partial(_primal_and_jac_real, physics_at_t1))(v_locs, params)
+        _body = lambda vp: _primal_and_jac_real(physics_at_t1, vp[0], vp[1])
+        (f_l, q_l), (df_l, dq_l) = _map_devices(
+            _body,
+            (v_locs, params),
+            strategy=group.assembly_strategy,
+            chunk_size=group.assembly_chunk_size,
+        )
 
         total_f = total_f.at[group.eq_indices].add(f_l)
         total_q = total_q.at[group.eq_indices].add(q_l)
@@ -406,16 +449,26 @@ def assemble_gc_real(
 
         # Direct combined bypass for VA components with combined_fn.
         if group.combined_func is not None:
-            _, _, df_l, dq_l = jax.vmap(
-                lambda v, p: group.combined_func(v, p, 0.0)
-            )(v_locs, group.params)
+            _body = lambda vp: group.combined_func(vp[0], vp[1], 0.0)
+            _, _, df_l, dq_l = _map_devices(
+                _body,
+                (v_locs, group.params),
+                strategy=group.assembly_strategy,
+                chunk_size=group.assembly_chunk_size,
+            )
             g_vals_list.append(df_l.reshape(-1))
             c_vals_list.append(dq_l.reshape(-1))
             continue
 
         physics_at_dc = functools.partial(_real_physics, group=group, t1=0.0)
 
-        (_, _), (df_l, dq_l) = jax.vmap(functools.partial(_primal_and_jac_real, physics_at_dc))(v_locs, group.params)
+        _body = lambda vp: _primal_and_jac_real(physics_at_dc, vp[0], vp[1])
+        (_, _), (df_l, dq_l) = _map_devices(
+            _body,
+            (v_locs, group.params),
+            strategy=group.assembly_strategy,
+            chunk_size=group.assembly_chunk_size,
+        )
 
         g_vals_list.append(df_l.reshape(-1))
         c_vals_list.append(dq_l.reshape(-1))
@@ -459,7 +512,11 @@ def assemble_residual_only_real(
 
         if _is_osdi(group):
             f_l, q_l, _ = _assemble_osdi_group(
-                y_guess, group, alpha=1.0, dt=1.0, residual_only=True,
+                y_guess,
+                group,
+                alpha=1.0,
+                dt=1.0,
+                residual_only=True,
             )
             total_f = total_f.at[group.eq_indices].add(f_l)
             total_q = total_q.at[group.eq_indices].add(q_l)
@@ -474,7 +531,13 @@ def assemble_residual_only_real(
 
         physics_at_t1 = functools.partial(_real_physics, group=group, t1=t1)
 
-        f_l, q_l = jax.vmap(physics_at_t1)(v, group.params)
+        _body = lambda vp: physics_at_t1(vp[0], vp[1])
+        f_l, q_l = _map_devices(
+            _body,
+            (v, group.params),
+            strategy=group.assembly_strategy,
+            chunk_size=group.assembly_chunk_size,
+        )
 
         total_f = total_f.at[group.eq_indices].add(f_l)
         total_q = total_q.at[group.eq_indices].add(q_l)
@@ -636,7 +699,11 @@ def assemble_residual_only_complex(
 
         if _is_osdi(group):
             f_l, q_l, _ = _assemble_osdi_group(
-                y_guess[:half_size], group, alpha=1.0, dt=1.0, residual_only=True,
+                y_guess[:half_size],
+                group,
+                alpha=1.0,
+                dt=1.0,
+                residual_only=True,
             )
             total_f = total_f.at[group.eq_indices].add(f_l)
             total_q = total_q.at[group.eq_indices].add(q_l)
