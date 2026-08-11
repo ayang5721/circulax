@@ -8,6 +8,7 @@ archive/*
 app/*
 circulax_workspace.code-workspace
 docs/references/
+docs/ideas/
 *code-workspace
 site/*
 docs/examples/*_files

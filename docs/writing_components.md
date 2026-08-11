@@ -156,6 +156,61 @@ The setup function only needs to declare the parameters it uses — extra physic
 
 ---
 
+## Holomorphic Components and AC Analysis
+
+When running S-parameter (AC) analysis on complex-valued circuits, circulax needs to know whether a component's physics function is **holomorphic** (complex-differentiable). This determines whether the fast N×N Wirtinger system or the full 2N×2N real-block system is used.
+
+### What is holomorphic?
+
+A function is holomorphic if it only uses operations that are complex-differentiable: addition, multiplication, division, `jnp.exp`, `jnp.sin`, `jnp.sqrt`, matrix operations, etc.
+
+Operations like `jnp.real()`, `jnp.imag()`, `jnp.conj()`, and `jnp.abs()` (on complex inputs) are **not** holomorphic — they couple the field and its conjugate, so the Jacobian cannot be collapsed into a single N×N complex matrix.
+
+### Default: `holomorphic=False` (safe)
+
+By default, components are marked `holomorphic=False`. This means any circuit containing them will use the full 2N×2N real-block system for AC analysis, which is **always correct** but slower (2N×2N vs N×N).
+
+```python
+@component(ports=("p1", "p2", "v_e"), states=("a", "i_out"))
+def RingModulator(signals, s, ...):
+    voltage = jnp.real(signals.v_e)  # non-holomorphic operation
+    ...
+```
+
+### Opting in: `holomorphic=True` (fast)
+
+When you know your component only uses holomorphic operations, set `holomorphic=True` to enable the faster N×N path. If *every* component in a circuit is holomorphic, `circuit.sp()` will automatically use the fast path.
+
+```python
+@component(ports=("p1", "p2"), holomorphic=True)
+def Resistor(signals, s, R=1e3):
+    i = (signals.p1 - signals.p2) / R
+    return {"p1": i, "p2": -i}, {}
+```
+
+All built-in passive components (resistors, capacitors, inductors, waveguides, couplers) and linear sources are marked `holomorphic=True`. Non-linear components that use clipping or comparisons on signal values (diodes, MOSFETs) default to `holomorphic=False`.
+
+### Compile-time validation
+
+When compiling a complex-valued circuit, circulax traces each `holomorphic=True` component with complex inputs and inspects the JAX computation graph (jaxpr) for non-holomorphic primitives. If a mismatch is detected, a warning is emitted:
+
+```
+UserWarning: Component group 'ring_eo' is marked holomorphic=True but uses
+non-holomorphic operations: real. Set holomorphic=False on its
+@component/@source decorator.
+```
+
+### Auto-detection at circuit level
+
+`circuit.sp()` defaults to `holomorphic="auto"`, which inspects all component groups:
+
+- If every group has `holomorphic=True` → uses the fast N×N Wirtinger system
+- If any group has `holomorphic=False` → uses the full 2N×2N real-block system
+
+You can override with `circuit.sp(..., holomorphic=True)` or `circuit.sp(..., holomorphic=False)`.
+
+---
+
 ## `@fdomain_component` — Frequency-Domain Components
 
 For components whose admittance depends on the electrical signal frequency and cannot be expressed as an instantaneous time-domain relation.

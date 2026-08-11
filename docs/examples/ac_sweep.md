@@ -1,6 +1,6 @@
 ## AC Small-Signal Analysis (S-parameters)
 
-This notebook demonstrates `circuit.ac(...)` on three circuits:
+This notebook demonstrates `circuit.sp(...)` on three circuits:
 
 1. **Parallel RC — single port** — a minimal benchmark.  We compare $S_{11}(f)$ against the analytical admittance formula.
 2. **Series-R shunt-C lowpass — two ports** — a classic LC prototype filter.  We recover all four S-parameters and verify passivity.
@@ -96,7 +96,7 @@ circuit = compile_circuit(net_rc, models)
 y_dc = circuit.dc()
 
 freqs = jnp.logspace(6, 10, 300)  # 1 MHz → 10 GHz
-S = jax.jit(lambda f: circuit.ac(ports=["in"], freqs=f, z0=Z0, y_dc=y_dc))(freqs)
+S = jax.jit(lambda f: circuit.sp(ports=["in"], freqs=f, z0=Z0, y_dc=y_dc))(freqs)
 S11 = S[:, 0, 0]
 print(f"S shape: {S.shape}  (N_freqs, N_ports, N_ports)")
 
@@ -206,7 +206,7 @@ net_lp = {
 circuit_lp = compile_circuit(net_lp, models)
 y_dc_lp = circuit_lp.dc()
 
-S_lp = jax.jit(lambda f: circuit_lp.ac(ports=["in", "out"], freqs=f, z0=Z0, y_dc=y_dc_lp))(freqs)
+S_lp = jax.jit(lambda f: circuit_lp.sp(ports=["in", "out"], freqs=f, z0=Z0, y_dc=y_dc_lp))(freqs)
 print(f"S shape: {S_lp.shape}  (N_freqs, 2, 2)")
 
 ```
@@ -325,7 +325,7 @@ net_skin = {
 circuit_sk = compile_circuit(net_skin, models_skin)
 y_dc_sk = circuit_sk.dc()
 
-S_sk = jax.jit(lambda f: circuit_sk.ac(ports=["in"], freqs=f, z0=Z0, y_dc=y_dc_sk))(freqs)
+S_sk = jax.jit(lambda f: circuit_sk.sp(ports=["in"], freqs=f, z0=Z0, y_dc=y_dc_sk))(freqs)
 S11_sk = S_sk[:, 0, 0]
 
 # Analytical: Z(f) is real so |Γ| = |Z - Z0| / |Z + Z0|
@@ -382,4 +382,4 @@ print(f"S11 at 10 GHz: {float(jnp.abs(S11_sk[-1])):.4f}  (expected {float(jnp.ab
 
 
 !!! note "Advanced port-node workflows"
-    `circuit.ac(...)` is the normal API for named S-parameter ports. The lower-level `setup_ac_sweep()` helper remains available when you need to build custom port-node lists or transform-control loops around compiled groups.
+    `circuit.sp(...)` is the normal API for named S-parameter ports. The lower-level `setup_ac_sweep()` helper remains available when you need to build custom port-node lists or transform-control loops around compiled groups.

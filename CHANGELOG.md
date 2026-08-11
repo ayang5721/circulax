@@ -6,24 +6,69 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-30
+
 ### Added
 
-- **netlist**: Accept GDSFactory 'nets' list alongside 'connections'([`1c5ce34`](https://github.com/gdsfactory/circulax/commit/1c5ce348fa56a12d6402fc226e712a452873c8a8))
-- **compiler**: GDSFactory interop — filter unknown settings, static non-numeric fields([`98af777`](https://github.com/gdsfactory/circulax/commit/98af7777bf1fbf671c84337933d1aacc50e76e68))
-- **changelog**: Add git-cliff config, pixi tasks, and GitHub Release automation([`92fcc6c`](https://github.com/gdsfactory/circulax/commit/92fcc6c46fc832df8e34f9d4eea372c5bff19ac3))
+- **hierarchy**: Recursive netlist flattening and subcircuit composition ([`4ff9927`](https://github.com/gdsfactory/circulax/commit/4ff9927503249571c0fcfcef2a47d171f984b111))
+- **hierarchy**: Parameterized subcircuits with `$param` resolution ([`79c10c2`](https://github.com/gdsfactory/circulax/commit/79c10c2))
+- **ac-sweep**: Complex AC sweep for photonic circuits ([`35d9dc8`](https://github.com/gdsfactory/circulax/commit/35d9dc89ad1d387fee08baa545e24803da4ecff8))
+- **ac-sweep**: Non-holomorphic circuit support via 2N×2N real-block system ([`20f8d7c`](https://github.com/gdsfactory/circulax/commit/20f8d7c02b2e6a5009e0ce1aa210e692cc879147))
+- **ac-sweep**: `holomorphic` flag with auto-detection on `Circuit.sp()` ([`7d82f92`](https://github.com/gdsfactory/circulax/commit/7d82f929e5b6aa5ed41d77e05e09d6710e3b091b))
+- **solvers**: Per-port and per-frequency z0 in AC sweep ([`71e5d40`](https://github.com/gdsfactory/circulax/commit/71e5d40722e5a3619a7535025959eaa3356e84b3))
+- **solvers**: `renormalize()` for impedance transformation ([`61241cc`](https://github.com/gdsfactory/circulax/commit/61241ccd7f855d52b2cfa5b781e494023d312dde))
+- **validation**: Jaxpr-based holomorphic operation warnings on complex circuits ([`303e2b7`](https://github.com/gdsfactory/circulax/commit/303e2b78fd4e1a41b3688267ca10554ad5e2ffff))
+- **components**: Flip `holomorphic` default to `False`, annotate known-holomorphic types ([`87cfb69`](https://github.com/gdsfactory/circulax/commit/87cfb69b25f4f310384df3210b4d4315afc7d54f))
+- **compiler**: `params_map` for setting-to-field name mapping in `compile_netlist()` ([`86db027`](https://github.com/gdsfactory/circulax/commit/86db027467e9977852e0efb5bda05ce63878ab27))
 
 ### Changed
 
-- Revert tol to 1e-6, reserve 'ground', clean up from review([`e5ddc10`](https://github.com/gdsfactory/circulax/commit/e5ddc10497879e980755969c00e4f39c92c555d7))
+- **circuit**: Deprecate `Circuit.ac()` in favor of `Circuit.sp()` ([`2711982`](https://github.com/gdsfactory/circulax/commit/271198231fd1b0bcd5da01b3cccd06498c5eaabe))
 
 ### Documentation
 
-- **compiler**: Document silent settings-filter behaviour in compile_netlist([`94d7dad`](https://github.com/gdsfactory/circulax/commit/94d7daddbca6d1038d523029b719852ac1db4967))
+- **ring-modulator**: Add Part 2b AC small-signal analysis section ([`75879a3`](https://github.com/gdsfactory/circulax/commit/75879a30b1841a3c77fa9506719fbb2bc020c141))
+- **hierarchy**: Add specs overview and hierarchy spec ([`038d185`](https://github.com/gdsfactory/circulax/commit/038d185229937428b069da4e52fe48adf914996e))
 
 ### Fixed
 
-- **solver**: Scale-invariant Newton damping + expose rtol/atol([`0c1b88a`](https://github.com/gdsfactory/circulax/commit/0c1b88a6cde6e86cc470dd918404dd108bf97b3e))
-- **testbench**: Include testbench.py that was missing from e1235a7([`a8253c1`](https://github.com/gdsfactory/circulax/commit/a8253c1b3bdd6d0300a8f90093a45cdca12d840f))
+- **solvers**: Vectorize FD gradient computation for OSDI groups in adjoint ([`deba49e`](https://github.com/gdsfactory/circulax/commit/deba49e5fc80ef557e30b237e3b29efd66dd3b4c))
+
+## [0.2.2] - 2026-07-24
+
+### Added
+
+- **components**: Add `port_aliases` parameter to `@component`/`@source` decorators ([`31dea2d`](https://github.com/gdsfactory/circulax/commit/31dea2d8f9428e7ed166793820a6286a2aa2234d))
+
+### Fixed
+
+- **netlist**: Remove global monkeypatch of `sax.Netlist` ([`f8c5000`](https://github.com/gdsfactory/circulax/commit/f8c50003ae35439bb0f165438172d8e0bc67e115))
+- **sax**: Add wave-stamp physics path for singular S-matrix components ([`d8c74c4`](https://github.com/gdsfactory/circulax/commit/d8c74c48b4d5f183c42021e8a126c6447e74b4b4))
+- **deps**: Relax jax pin to `>=0.7.2,<0.10.0` after klujax dropped pmap ([`aded1be`](https://github.com/gdsfactory/circulax/commit/aded1be))
+
+## [0.2.1] - 2026-06-27
+
+### Fixed
+
+- Replace pre-compiled OSDI binaries with VA source + CI compilation ([`59f509f`](https://github.com/gdsfactory/circulax/commit/59f509f4e6b53409fdecf7d6164c98110d4219e6))
+- **ci**: OSDI compilation on macOS/Windows, openvaf-r caching, docs workflow ([`15ec0b7`](https://github.com/gdsfactory/circulax/commit/15ec0b7b438626941162d4db3cf7ac2dc945f086))
+- **ci**: Set `JAX_PLATFORMS=cpu` to prevent SIGILL on GitHub runners ([`6648d24`](https://github.com/gdsfactory/circulax/commit/6648d2461dac8e38fe6c6c70279a8c89708fd320))
+- Skip OSDI notebooks and fix GitHub Release tag detection ([`440d3fe`](https://github.com/gdsfactory/circulax/commit/440d3fe558cb52bcd133d652a53b3332d03addc0))
+
+## [0.2.0] - 2026-06-25
+
+### Added
+
+- **netlist**: Accept GDSFactory 'nets' list alongside 'connections' ([`1c5ce34`](https://github.com/gdsfactory/circulax/commit/1c5ce348fa56a12d6402fc226e712a452873c8a8))
+- **compiler**: GDSFactory interop — filter unknown settings, static non-numeric fields ([`98af777`](https://github.com/gdsfactory/circulax/commit/98af7777bf1fbf671c84337933d1aacc50e76e68))
+- **netlist**: Add kfnetlist as primary netlist format ([`25e1d87`](https://github.com/gdsfactory/circulax/commit/25e1d872400d22d68bc1f0a584f37f34c1fc3664))
+- **va**: OSDI assembly, performance optimizations, parameter sensitivity ([`6ae601b`](https://github.com/gdsfactory/circulax/commit/6ae601b28b9d26a2f54252afe74e6e920a37194c))
+- **changelog**: Add git-cliff config, pixi tasks, and GitHub Release automation ([`92fcc6c`](https://github.com/gdsfactory/circulax/commit/92fcc6c46fc832df8e34f9d4eea372c5bff19ac3))
+
+### Fixed
+
+- **solver**: Scale-invariant Newton damping + expose rtol/atol ([`0c1b88a`](https://github.com/gdsfactory/circulax/commit/0c1b88a6cde6e86cc470dd918404dd108bf97b3e))
+
 ## [0.1.5] - 2026-04-23
 
 ### Documentation

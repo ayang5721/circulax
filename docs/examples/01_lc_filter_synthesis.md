@@ -137,7 +137,7 @@ print(f"  L2 = {L2_init*1e9:.1f} nH   ({L2_init/L_target:.1f}× target)")
 #
 # Port nodes are defined by 1 TΩ probe resistors — negligible effect on the
 # circuit but they register the named AC ports. The Z0=50 Ω source and load
-# terminations are injected by circuit.ac(...), NOT as explicit resistors.
+# terminations are injected by circuit.sp(...), NOT as explicit resistors.
 # Including explicit source/load resistors AND letting AC add Z0 would give
 # 25 Ω effective termination and the wrong Butterworth values.
 
@@ -198,7 +198,7 @@ $$\mathcal{L} = \frac{1}{N_f} \sum_{k=1}^{N_f} \left(|S_{21}(f_k)| - |S_{21}^{\t
 
 ### Differentiability
 
-`circuit.ac(params={...})` functionally updates the compiled component arrays without modifying them in place, then assembles and solves the S-parameter sweep inside JAX. The whole loss remains a pure function compatible with `jax.grad`.
+`circuit.sp(params={...})` functionally updates the compiled component arrays without modifying them in place, then assembles and solves the S-parameter sweep inside JAX. The whole loss remains a pure function compatible with `jax.grad`.
 
 
 
@@ -219,7 +219,7 @@ def loss_fn(log_params):
     # Recover physical values from log representation
     L1, C1, L2 = jnp.exp(log_params)
 
-    S = circuit.ac(
+    S = circuit.sp(
         params={"L1.L": L1, "C1.C": C1, "L2.L": L2},
         ports=["in", "out"],
         freqs=freqs,
@@ -301,7 +301,7 @@ L1_opt, C1_opt, L2_opt = np.exp(np.array(log_params))
 
 def compute_s21(L1, C1, L2):
     """Evaluate |S21| over the frequency sweep for given component values."""
-    S = jax.jit(lambda l1, c1, l2: circuit.ac(
+    S = jax.jit(lambda l1, c1, l2: circuit.sp(
         params={"L1.L": l1, "C1.C": c1, "L2.L": l2},
         ports=["in", "out"],
         freqs=freqs,
@@ -391,7 +391,7 @@ print(f"  C1: {C1_opt*1e12:.2f} pF  vs  {C_target*1e12:.2f} pF  "
 print(f"  L2: {L2_opt*1e9:.2f} nH  vs  {L_target*1e9:.2f} nH  "
       f"({abs(L2_opt - L_target)/L_target*100:.1f}% error)")
 
-S_opt = jax.jit(lambda l1, c1, l2: circuit.ac(
+S_opt = jax.jit(lambda l1, c1, l2: circuit.sp(
     params={"L1.L": l1, "C1.C": c1, "L2.L": l2},
     ports=["in", "out"],
     freqs=freqs,
@@ -421,8 +421,8 @@ Starting from component values that were roughly **3× away** from the Butterwor
 | Step | Tool | Role |
 |------|------|------|
 | Netlist compilation | `compile_circuit` | Runs once; produces a reusable high-level `Circuit` |
-| Differentiable parameter update | `circuit.ac(params={...})` | Functional instance parameter updates; no re-compilation |
-| Differentiable S-parameters | `circuit.ac(...)` | Assembles Y(jω) and solves via `jax.vmap` over frequencies |
+| Differentiable parameter update | `circuit.sp(params={...})` | Functional instance parameter updates; no re-compilation |
+| Differentiable S-parameters | `circuit.sp(...)` | Assembles Y(jω) and solves via `jax.vmap` over frequencies |
 | Exact gradients | `jax.grad` | Reverse-mode AD through the entire forward pass |
 | Optimisation | `optax.adam` | Standard first-order optimiser, works in log-space |
 

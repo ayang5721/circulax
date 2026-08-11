@@ -71,6 +71,7 @@ class ComponentGroup(eqx.Module):
     is_fdomain: bool = eqx.field(static=True, default=False)
     amplitude_param: str = eqx.field(static=True, default="")
     combined_func: Any = eqx.field(static=True, default=None)
+    holomorphic: bool = eqx.field(static=True, default=False)
 
     # Per-group device-map strategy for assembly. "vmap" (default) batches the
     # device predicate (both-branch select); "scan"/"chunked" evaluate devices
@@ -283,6 +284,11 @@ def compile_netlist(
 
         comp_cls = models_map[comp_type]
         settings = settings_override.get(name, inst.settings or {})
+
+        # Apply parameter name mapping (cell settings → model fields).
+        if params_map and comp_type in params_map:
+            rename = params_map[comp_type]
+            settings = {rename.get(k, k): v for k, v in settings.items()}
 
         # OSDI components use a descriptor object instead of an Equinox class.
         if OsdiModelDescriptor is not None and isinstance(comp_cls, OsdiModelDescriptor):

@@ -3,7 +3,13 @@
 from circulax._version import __version__
 from circulax.circuit import Circuit, compile_circuit
 from circulax.compiler import compile_netlist
-from circulax.netlist import build_net_map, build_net_map_kfnetlist, netlist, sax_to_kfnetlist
+from circulax.netlist import (
+    build_net_map,
+    build_net_map_kfnetlist,
+    flatten_recursive_netlist,
+    netlist,
+    sax_to_kfnetlist,
+)
 from circulax.netlist import circulaxNetlist as Netlist
 from circulax.s_transforms import fdomain_component, sax_component
 from circulax.solvers import analyze_circuit, setup_ac_sweep, setup_harmonic_balance, setup_transient

@@ -76,6 +76,8 @@ class Circuit:
         rtol: float = 1e-6,
         atol: float = 1e-6,
         max_steps: int = 100,
+        _source_netlist: dict | None = None,
+        _source_models: dict | None = None,
     ) -> None:
         self.solver = solver
         self.groups = groups
@@ -84,6 +86,25 @@ class Circuit:
         self.rtol = rtol
         self.atol = atol
         self.max_steps = max_steps
+        self._source_netlist = _source_netlist
+        self._source_models = _source_models
+
+    @property
+    def ports(self) -> tuple[str, ...]:
+        """External port names declared in the source netlist."""
+        if self._source_netlist is None:
+            return ()
+        return tuple(self._source_netlist.get("ports", {}).keys())
+
+    @property
+    def source_netlist(self) -> dict | None:
+        """The original netlist used to compile this circuit, if available."""
+        return self._source_netlist
+
+    @property
+    def source_models(self) -> dict | None:
+        """The leaf models used to compile this circuit, if available."""
+        return self._source_models
 
     def _n(self) -> int:
         return self.sys_size * (2 if self.solver.is_complex else 1)
@@ -280,17 +301,18 @@ class Circuit:
         run_transient = setup_transient(groups=groups, linear_strategy=self.solver, transient_solver=transient_solver)
         return run_transient(t0=t0, t1=t1, dt0=dt0, y0=y0, saveat=saveat_obj, **kwargs)
 
-    def ac(
+    def sp(
         self,
         *,
         ports: str | Sequence[str],
         freqs: jax.Array,
-        z0: float = 50.0,
+        z0: float | jax.Array = 50.0,
         y_dc: jax.Array | None = None,
+        holomorphic: bool | str = "auto",
         params: dict[str, Any] | None = None,
         **param_updates: Any,
     ) -> jax.Array:
-        """Run an AC small-signal S-parameter sweep.
+        """Run a small-signal S-parameter sweep.
 
         Linearises at the DC operating point and sweeps over ``freqs``,
         returning S-parameters for the given ports.
@@ -298,8 +320,16 @@ class Circuit:
         Args:
             ports: Port name(s) to probe (e.g. ``"out"`` or ``["in", "out"]``).
             freqs: Frequency array in Hz.
-            z0: Reference impedance (default 50 Ohm).
+            z0: Reference impedance in ohms.  Scalar (uniform) or array of
+                shape ``(N_ports,)`` (per-port).  Default 50 Ohm.  For
+                frequency-dependent impedance, solve at a fixed z0 and use
+                :func:`~circulax.solvers.renormalize` afterwards.
             y_dc: DC operating point. If ``None``, a DC solve is run first.
+            holomorphic: If ``"auto"`` (default), infer from component flags —
+                if any component in the circuit has ``holomorphic=False``, the
+                full 2N×2N real-block system is used.  Pass ``True`` to force
+                the N×N Wirtinger system, or ``False`` to force the 2N×2N
+                system.
             params: Parameter updates (same format as :meth:`dc`).
                 Array-valued params are **not** supported.
             **param_updates: Global parameter overrides.
@@ -307,20 +337,14 @@ class Circuit:
         Returns:
             Complex S-parameter array of shape ``(len(freqs), n_ports, n_ports)``.
 
-        Raises:
-            ValueError: If the circuit is complex-valued (photonic). Use the
-                low-level ``setup_ac_sweep`` API for complex circuits.
-
         """
         from circulax.solvers import setup_ac_sweep
 
-        if self.solver.is_complex:
-            msg = "Circuit.ac() currently supports real-valued circuits. Use the low-level AC API for custom paths."
-            raise ValueError(msg)
-
         updates = self._coerce_param_updates(params, param_updates)
-        arrays = self._require_scalar_params(updates, "ac")
+        arrays = self._require_scalar_params(updates, "sp")
         groups = self._with_param_values(arrays)
+        if holomorphic == "auto":
+            holomorphic = _infer_holomorphic(groups)
         if y_dc is None:
             y_dc = self.solver.solve_dc(
                 groups,
@@ -331,8 +355,32 @@ class Circuit:
             )
         port_list = [ports] if isinstance(ports, str) else list(ports)
         port_nodes = [self._resolve_port_node(port) for port in port_list]
-        run_ac = setup_ac_sweep(groups, self.sys_size, port_nodes, z0=z0)
+        run_ac = setup_ac_sweep(
+            groups, self.sys_size, port_nodes, z0=z0, is_complex=self.solver.is_complex, holomorphic=holomorphic
+        )
         return run_ac(y_dc, jnp.asarray(freqs))
+
+    def ac(
+        self,
+        *,
+        ports: str | Sequence[str],
+        freqs: jax.Array,
+        z0: float | jax.Array = 50.0,
+        y_dc: jax.Array | None = None,
+        holomorphic: bool | str = "auto",
+        params: dict[str, Any] | None = None,
+        **param_updates: Any,
+    ) -> jax.Array:
+        """Run a small-signal S-parameter sweep.
+
+        .. deprecated:: 0.2
+            Use :meth:`sp` instead. Will be removed in 0.3.
+
+        """
+        warnings.warn("Circuit.ac() is deprecated, use Circuit.sp() instead.", DeprecationWarning, stacklevel=2)
+        return self.sp(
+            ports=ports, freqs=freqs, z0=z0, y_dc=y_dc, holomorphic=holomorphic, params=params, **param_updates
+        )
 
     def hb(
         self,
@@ -447,6 +495,36 @@ class Circuit:
         )
 
 
+def _embed_circuit_subcircuits(
+    net_dict: dict | kfnl.Netlist,
+    models_map: dict,
+    circuit_models: dict[str, Circuit],
+) -> dict:
+    """Build a RecursiveNetlist from Circuit objects in *models_map* (mutates *models_map*)."""
+    from circulax.netlist import _is_recursive_netlist
+
+    if isinstance(net_dict, kfnl.Netlist):
+        net_dict = net_dict.to_dict()
+    recnet: dict[str, dict] = {}
+    if isinstance(net_dict, dict) and _is_recursive_netlist(net_dict):
+        recnet.update(net_dict)
+    else:
+        recnet["top"] = net_dict  # type: ignore[assignment]
+    for name, circ in circuit_models.items():
+        if circ.source_netlist is None:
+            msg = f"Circuit '{name}' has no stored source netlist and cannot be used as a subcircuit."
+            raise ValueError(msg)
+        recnet[name] = circ.source_netlist
+        for mk, mv in (circ.source_models or {}).items():
+            existing = models_map.get(mk)
+            if existing is not None and existing is not mv:
+                msg = f"Model name conflict: '{mk}' maps to different objects in parent and subcircuit '{name}'."
+                raise ValueError(msg)
+            models_map[mk] = mv
+        del models_map[name]
+    return recnet
+
+
 def compile_circuit(
     net_dict: dict | kfnl.Netlist,
     models_map: dict,
@@ -461,11 +539,19 @@ def compile_circuit(
 ) -> Circuit:
     """Compile a netlist into a callable :class:`Circuit`.
 
-    Accepts either a ``kfnetlist.Netlist`` or a SAX-format dict.
+    Accepts a ``kfnetlist.Netlist``, a SAX-format dict, or a
+    ``RecursiveNetlist`` (``dict[str, Netlist]``).  When a recursive netlist
+    is given, subcircuit instances are flattened before compilation.
+
+    A compiled :class:`Circuit` may also appear as a value in *models_map*;
+    its stored source netlist is inlined as a subcircuit automatically.
 
     Args:
-        net_dict: Netlist (kfnetlist.Netlist or SAX-format dict).
-        models_map: Mapping from component type name strings to component classes.
+        net_dict: Netlist (kfnetlist.Netlist, SAX-format dict, or
+            RecursiveNetlist).
+        models_map: Mapping from component type name strings to component
+            classes, SAX model functions, or compiled :class:`Circuit`
+            objects.
         backend: Linear solver backend (``"default"``, ``"dense"``, ``"klu"`` etc.).
         is_complex: If ``True``, treat the circuit as complex-valued (photonic).
             If ``"auto"`` (default), infer this from component outputs.
@@ -486,6 +572,7 @@ def compile_circuit(
 
     """
     from circulax.compiler import compile_netlist
+    from circulax.netlist import _is_recursive_netlist, flatten_recursive_netlist
     from circulax.solvers.linear import analyze_circuit
 
     groups, sys_size, port_map = compile_netlist(net_dict, models_map, assembly_strategy=assembly_strategy)
@@ -494,6 +581,8 @@ def compile_circuit(
     elif not isinstance(is_complex, bool):
         msg = "is_complex must be True, False, or 'auto'."
         raise ValueError(msg)
+    if is_complex:
+        _validate_holomorphic_flags(groups)
     solver = analyze_circuit(groups, sys_size, backend=backend, is_complex=is_complex, g_leak=g_leak)
     return Circuit(
         solver=solver,
@@ -503,7 +592,49 @@ def compile_circuit(
         rtol=rtol,
         atol=atol,
         max_steps=max_steps,
+        _source_netlist=source_netlist,
+        _source_models=source_models,
     )
+
+
+def _infer_holomorphic(groups: dict) -> bool:
+    """Return ``True`` if all component groups are holomorphic."""
+    return all(getattr(group, "holomorphic", True) for group in groups.values())
+
+
+def _validate_holomorphic_flags(groups: dict) -> None:
+    """Warn about components marked holomorphic=True that use non-holomorphic ops.
+
+    Only called for complex-valued circuits where holomorphicity matters.
+    Traces each group's physics with complex inputs and inspects the jaxpr.
+    """
+    from circulax.components.base_component import _jaxpr_has_non_holomorphic
+
+    for name, group in groups.items():
+        if not getattr(group, "holomorphic", True):
+            continue
+        if getattr(group, "is_fdomain", False):
+            continue
+        try:
+            n_vars = group.var_indices.shape[1]
+            count = group.var_indices.shape[0]
+            vars_vec = jnp.zeros(n_vars, dtype=jnp.complex128)
+            params0 = jax.tree.map(
+                lambda x: x[0] if hasattr(x, "shape") and x.shape[:1] == (count,) else x,
+                group.params,
+            )
+            closed_jaxpr = jax.make_jaxpr(group.physics_func, static_argnums=(0,))(0.0, vars_vec, params0)
+            bad_ops = _jaxpr_has_non_holomorphic(closed_jaxpr.jaxpr)
+            if bad_ops:
+                ops_str = ", ".join(sorted(bad_ops))
+                warnings.warn(
+                    f"Component group '{name}' is marked holomorphic=True but "
+                    f"uses non-holomorphic operations: {ops_str}. Set "
+                    f"holomorphic=False on its @component/@source decorator.",
+                    stacklevel=3,
+                )
+        except Exception:
+            pass
 
 
 def _infer_is_complex(groups: dict) -> bool:

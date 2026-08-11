@@ -4,6 +4,7 @@
     * [Transient Simulation](transient.md)
     * [Harmonic Balance](harmonic_balance.md)
     * [Choosing a Solver](choosing_a_solver.md)
+    * [Subcircuit Hierarchy](hierarchy.md)
 * Getting Started
     * [Resistor Ladder](examples/resistor_ladder.md)
     * [LCR Transient](examples/lcr_transient.md)

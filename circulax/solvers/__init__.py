@@ -1,6 +1,6 @@
 """Root finding and transient solvers."""
 
-from .ac_sweep import setup_ac_sweep
+from .ac_sweep import renormalize, setup_ac_sweep
 from .adjoint import transient_parameter_sensitivity, transient_parameter_sensitivity_dense
 from .assembly import assemble_system_complex, assemble_system_real
 from .circuit_diffeq import circuit_diffeqsolve
@@ -57,6 +57,7 @@ __all__ = [
     "circuit_diffeqsolve",
     "dc_parameter_sensitivity",
     "dc_parameter_sensitivity_dense",
+    "renormalize",
     "setup_ac_sweep",
     "setup_harmonic_balance",
     "setup_transient",
