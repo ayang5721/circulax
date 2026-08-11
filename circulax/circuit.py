@@ -536,6 +536,7 @@ def compile_circuit(
     atol: float = 1e-6,
     max_steps: int = 100,
     assembly_strategy: dict | Callable | None = None,
+    params_map: dict[str, dict[str, str]] | None = None,
 ) -> Circuit:
     """Compile a netlist into a callable :class:`Circuit`.
 
@@ -575,7 +576,25 @@ def compile_circuit(
     from circulax.netlist import _is_recursive_netlist, flatten_recursive_netlist
     from circulax.solvers.linear import analyze_circuit
 
-    groups, sys_size, port_map = compile_netlist(net_dict, models_map, assembly_strategy=assembly_strategy)
+    models_map = dict(models_map)
+    source_netlist: dict | None = None
+    source_models: dict | None = None
+
+    circuit_models = {k: v for k, v in models_map.items() if isinstance(v, Circuit)}
+    if circuit_models:
+        net_dict = _embed_circuit_subcircuits(net_dict, models_map, circuit_models)
+
+    if isinstance(net_dict, dict) and _is_recursive_netlist(net_dict):
+        source_netlist = net_dict.get(next(iter(net_dict)))
+        source_models = {k: v for k, v in models_map.items() if not isinstance(v, Circuit)}
+        net_dict = flatten_recursive_netlist(net_dict)
+    elif isinstance(net_dict, dict):
+        source_netlist = net_dict
+        source_models = {k: v for k, v in models_map.items() if not isinstance(v, Circuit)}
+
+    groups, sys_size, port_map = compile_netlist(
+        net_dict, models_map, assembly_strategy=assembly_strategy, params_map=params_map
+    )
     if is_complex == "auto":
         is_complex = _infer_is_complex(groups)
     elif not isinstance(is_complex, bool):

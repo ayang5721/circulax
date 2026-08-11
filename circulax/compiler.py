@@ -188,6 +188,7 @@ def compile_netlist(
     models_map: dict,
     *,
     assembly_strategy: dict | Callable | None = None,
+    params_map: dict[str, dict[str, str]] | None = None,
 ) -> tuple[dict, int, dict]:
     """Compile a netlist into batched, vectorized component groups ready for simulation.
 
@@ -403,6 +404,7 @@ def compile_netlist(
             index_map=index_map,
             is_fdomain=getattr(comp_cls, "_is_fdomain", False),
             amplitude_param=getattr(comp_cls, "amplitude_param", ""),
+            holomorphic=getattr(comp_cls, "_holomorphic", True),
             combined_func=_combined_func,
             assembly_strategy=_strategy,
             assembly_chunk_size=_chunk_size,
