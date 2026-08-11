@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 import jax
@@ -535,7 +535,7 @@ def compile_circuit(
     rtol: float = 1e-6,
     atol: float = 1e-6,
     max_steps: int = 100,
-    params_map: dict[str, dict[str, str]] | None = None,
+    assembly_strategy: dict | Callable | None = None,
 ) -> Circuit:
     """Compile a netlist into a callable :class:`Circuit`.
 
@@ -559,9 +559,13 @@ def compile_circuit(
         rtol: Relative tolerance for the Newton solver.
         atol: Absolute tolerance for the Newton solver.
         max_steps: Max Newton iterations.
-        params_map: Optional mapping from component type names to dicts that
-            rename netlist setting keys to model field names, e.g.
-            ``{"thermal_heater": {"length": "length_um"}}``.
+        assembly_strategy: Optional per-group device-map strategy override
+            passed to :func:`~circulax.compiler.compile_netlist` (``"vmap"``,
+            ``"scan"``, or ``"chunked"``).  A ``dict`` keyed by group name (or
+            component type) or a callable ``group_name -> strategy``.  Use
+            ``"scan"`` for branchy kernels (e.g. BSIM4) to avoid the
+            both-branch compile blowup; unspecified groups default to
+            ``"vmap"`` (unchanged behaviour).
 
     Returns:
         A :class:`Circuit` ready to call with ``circuit(**params)``.
@@ -571,23 +575,7 @@ def compile_circuit(
     from circulax.netlist import _is_recursive_netlist, flatten_recursive_netlist
     from circulax.solvers.linear import analyze_circuit
 
-    models_map = dict(models_map)
-    source_netlist: dict | None = None
-    source_models: dict | None = None
-
-    circuit_models = {k: v for k, v in models_map.items() if isinstance(v, Circuit)}
-    if circuit_models:
-        net_dict = _embed_circuit_subcircuits(net_dict, models_map, circuit_models)
-
-    if isinstance(net_dict, dict) and _is_recursive_netlist(net_dict):
-        source_netlist = net_dict.get(next(iter(net_dict)))
-        source_models = {k: v for k, v in models_map.items() if not isinstance(v, Circuit)}
-        net_dict = flatten_recursive_netlist(net_dict)
-    elif isinstance(net_dict, dict):
-        source_netlist = net_dict
-        source_models = {k: v for k, v in models_map.items() if not isinstance(v, Circuit)}
-
-    groups, sys_size, port_map = compile_netlist(net_dict, models_map, params_map=params_map)
+    groups, sys_size, port_map = compile_netlist(net_dict, models_map, assembly_strategy=assembly_strategy)
     if is_complex == "auto":
         is_complex = _infer_is_complex(groups)
     elif not isinstance(is_complex, bool):

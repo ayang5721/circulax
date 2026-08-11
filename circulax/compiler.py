@@ -3,6 +3,7 @@
 import dataclasses
 import inspect
 from collections import defaultdict
+from collections.abc import Callable
 from functools import cache, wraps
 from typing import Any
 
@@ -71,6 +72,13 @@ class ComponentGroup(eqx.Module):
     amplitude_param: str = eqx.field(static=True, default="")
     combined_func: Any = eqx.field(static=True, default=None)
     holomorphic: bool = eqx.field(static=True, default=False)
+
+    # Per-group device-map strategy for assembly. "vmap" (default) batches the
+    # device predicate (both-branch select); "scan"/"chunked" evaluate devices
+    # with scalar predicates (real branches) — needed for BSIM-class kernels
+    # with many voltage-dependent conditionals.  See ``assembly._map_devices``.
+    assembly_strategy: str = eqx.field(static=True, default="vmap")
+    assembly_chunk_size: int = eqx.field(static=True, default=1)
 
 
 def get_model_width(func: callable) -> int:
@@ -175,21 +183,51 @@ def solve_connectivity(connections: dict) -> dict:  # noqa: C901
     return node_map, node_counter
 
 
-def compile_netlist(  # noqa: C901, PLR0912, PLR0915
+def compile_netlist(
     netlist: dict | kfnl.Netlist,
     models_map: dict,
     *,
-    params_map: dict[str, dict[str, str]] | None = None,
+    assembly_strategy: dict | Callable | None = None,
 ) -> tuple[dict, int, dict]:
     """Compile a netlist into batched, vectorized component groups ready for simulation.
 
     Accepts either a ``kfnetlist.Netlist`` (preferred) or a SAX-format dict
     (auto-converted via :func:`sax_to_kfnetlist`).
 
+    Args:
+        netlist: SAX dict or ``kfnetlist.Netlist``.
+        models_map: Mapping of component type name to model class/descriptor.
+        assembly_strategy: Optional per-group override of the device-map
+            strategy used during assembly (``"vmap"``, ``"scan"``, or
+            ``"chunked"``).  Either a ``dict`` keyed by group name (or component
+            type), or a callable ``group_name -> strategy | None``.  Takes
+            precedence over the component class's ``_assembly_strategy`` hint;
+            groups left unspecified default to ``"vmap"`` (today's behaviour).
+
     Returns:
         ``(compiled_groups, sys_size, port_to_node_map)``
 
     """
+
+    def _resolve_strategy(group_name: str, comp_type: str, comp_cls: type) -> tuple[str, int]:
+        # Precedence (high -> low): explicit override, class hint, default "vmap".
+        # An override value may be a bare strategy string or a
+        # ``(strategy, chunk_size)`` tuple; the chunk size otherwise comes from
+        # the class hint ``_assembly_chunk_size`` (default 1).
+        override = None
+        if callable(assembly_strategy):
+            override = assembly_strategy(group_name)
+        elif isinstance(assembly_strategy, dict):
+            override = assembly_strategy.get(group_name, assembly_strategy.get(comp_type))
+
+        override_chunk = None
+        if isinstance(override, (tuple, list)):
+            override, override_chunk = override[0], override[1]
+
+        strategy = override or getattr(comp_cls, "_assembly_strategy", None) or "vmap"
+        chunk_size = int(override_chunk if override_chunk is not None else getattr(comp_cls, "_assembly_chunk_size", 1))
+        return strategy, chunk_size
+
     _RESERVED = frozenset({"ground"})
 
     from circulax.s_transforms import _normalize_model
@@ -353,6 +391,7 @@ def compile_netlist(  # noqa: C901, PLR0912, PLR0915
         index_map = {item["name"]: i for i, item in enumerate(items)}
 
         _combined_func = getattr(comp_cls, "_combined_fn", None) if getattr(comp_cls, "_has_combined_fn", False) else None
+        _strategy, _chunk_size = _resolve_strategy(group_name, comp_type, comp_cls)
         compiled_groups[group_name] = ComponentGroup(
             name=group_name,
             var_indices=var_indices_arr,
@@ -365,7 +404,8 @@ def compile_netlist(  # noqa: C901, PLR0912, PLR0915
             is_fdomain=getattr(comp_cls, "_is_fdomain", False),
             amplitude_param=getattr(comp_cls, "amplitude_param", ""),
             combined_func=_combined_func,
-            holomorphic=getattr(comp_cls, "_holomorphic", True),
+            assembly_strategy=_strategy,
+            assembly_chunk_size=_chunk_size,
         )
 
     # --- Process OSDI buckets (requires circulax[verilog-a] / bosdi) ---
@@ -389,6 +429,7 @@ def compile_netlist(  # noqa: C901, PLR0912, PLR0915
         try:
             import numpy as _np
             from osdi_jax import osdi_setup_batch
+
             handle = osdi_setup_batch(descriptor.model.id, _np.asarray(params_arr))
         except ImportError:
             pass  # older bosdi without Tier-3; legacy model_id + params path still works
